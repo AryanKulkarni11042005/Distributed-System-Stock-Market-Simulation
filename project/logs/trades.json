@@ -1,0 +1,13 @@
+[
+  {
+    "id": 4,
+    "user_id": 1755795602253,
+    "stock_symbol": "AAPL",
+    "trade_type": "buy",
+    "quantity": 5,
+    "price": 186.74,
+    "total_amount": 933.7,
+    "timestamp": "2025-08-21T17:02:08.590538",
+    "sync_timestamp": null
+  }
+]
