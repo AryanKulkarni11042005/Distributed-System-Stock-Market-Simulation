@@ -1,0 +1,31 @@
+project/
+│── services/
+│ ├── user_service/
+│ │ └── app.py
+│ ├── bank_service/
+│ │ └── app.py
+│ ├── stock_exchange_service/
+│ │ └── app.py
+│ └── trade_logger_service/
+│ └── app.py
+│
+│── time_server/
+│ └── server.py # Berkeley clock synchronization
+│
+│── spark_jobs/
+│ ├── portfolio_analysis.py
+│ ├── volume_analysis.py
+│ └── profit_analysis.py
+│
+│── frontend/ # Flask templates or React UI
+│
+│── database/
+│ └── connection.py
+│
+│── utils/
+│ ├── config.py
+│ ├── exceptions.py
+│ └── logger.py
+│
+│── main.py
+│── README.md

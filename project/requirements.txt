@@ -1,0 +1,32 @@
+# Core Flask and Database
+pip install flask
+pip install flask-sqlalchemy
+pip install sqlalchemy
+
+# Distributed Computing
+pip install Pyro4
+
+# Environment and Configuration
+pip install python-dotenv
+
+# Data Processing and Analytics
+pip install pyspark
+pip install pandas
+pip install numpy
+
+# HTTP Requests (for service communication)
+pip install requests
+
+# Testing
+pip install pytest
+pip install pytest-flask
+
+# Data Visualization (for frontend charts)
+pip install plotly
+pip install matplotlib
+
+# Optional: For better JSON handling
+pip install jsonschema
+
+# Optional: For API documentation
+pip install flask-restx
