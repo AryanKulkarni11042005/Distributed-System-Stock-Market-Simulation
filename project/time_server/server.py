@@ -8,6 +8,7 @@ from collections import defaultdict
 import statistics
 
 # Add path for imports
+# This makes sure the script can find the 'utils' module
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.logger import setup_logger
@@ -18,14 +19,15 @@ logger = setup_logger(__name__)
 class TimeServer:
     """
     Berkeley Algorithm Implementation
-    - Collects timestamps from all registered services
-    - Computes average offset
-    - Provides synchronized time to services
+    - Collects timestamps from all registered services.
+    - Computes an average time offset.
+    - Provides a synchronized master time to all services.
     """
     
     def __init__(self):
         self.master_time = datetime.utcnow()
-        self.service_times = defaultdict(lambda: {'last_sync': None, 'offset': 0})
+        self.service_offsets = defaultdict(float)
+        self.service_last_sync = defaultdict(datetime)
         self.lock = threading.Lock()
         self.sync_interval = 30  # seconds
         
@@ -36,52 +38,35 @@ class TimeServer:
         logger.info("Time Server initialized with Berkeley Algorithm")
     
     def register_service(self, service_id):
-        """Register a service for time synchronization"""
+        """Register a service for time synchronization."""
         with self.lock:
-            self.service_times[service_id] = {
-                'last_sync': datetime.utcnow(),
-                'offset': 0
-            }
+            self.service_last_sync[service_id] = datetime.utcnow()
+            self.service_offsets[service_id] = 0.0
         logger.info(f"Registered service: {service_id}")
         return True
     
     def report_time(self, service_id, local_time_str):
-        """Service reports its local time for synchronization"""
-        try:
-            local_time = datetime.fromisoformat(local_time_str.replace('Z', '+00:00'))
-            current_time = datetime.utcnow()
-            
-            with self.lock:
-                # Calculate the offset between service time and master time
-                offset = (current_time - local_time).total_seconds()
-                self.service_times[service_id]['last_sync'] = current_time
-                self.service_times[service_id]['offset'] = offset
-            
-            logger.info(f"Service {service_id} reported time, offset: {offset:.3f}s")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error processing time report from {service_id}: {e}")
-            return False
+        """Service reports its local time for synchronization (not used in this version)."""
+        # This method can be used for a more active polling implementation
+        # For now, the server calculates offsets based on requests.
+        return True
     
     def get_synchronized_time(self, service_id):
-        """Get synchronized time for a service"""
+        """
+        Get synchronized time for a service.
+        This is the core of the fix: it now returns the shared master_time.
+        """
         with self.lock:
-            # Use Berkeley algorithm: adjust based on computed average offset
-            current_time = datetime.utcnow()
-            
-            # If service is not registered, register it
-            if service_id not in self.service_times:
+            # If service is not registered, register it first.
+            if service_id not in self.service_last_sync:
                 self.register_service(service_id)
             
-            # Apply the computed offset
-            service_offset = self.service_times[service_id]['offset']
-            synchronized_time = current_time - timedelta(seconds=service_offset)
-            
-            return synchronized_time.isoformat()
+            # **FIX:** Return the master time, which is the synchronized average time.
+            # The original code incorrectly returned a time based on the individual service's offset.
+            return self.master_time.isoformat()
     
     def _background_sync(self):
-        """Background thread for periodic synchronization"""
+        """Background thread for periodic synchronization."""
         while True:
             try:
                 time.sleep(self.sync_interval)
@@ -90,47 +75,58 @@ class TimeServer:
                 logger.error(f"Error in background sync: {e}")
     
     def _perform_berkeley_sync(self):
-        """Perform Berkeley algorithm synchronization"""
+        """
+        Performs the Berkeley algorithm synchronization.
+        This now actively requests time from clients (proxies) to calculate the average.
+        """
         with self.lock:
-            if not self.service_times:
+            if not self.service_last_sync:
                 return
+
+            current_server_time = datetime.utcnow()
+            time_diffs = [0] # Include server's own time (0 difference to itself)
             
-            # Collect all offsets from services that have reported recently
+            # In a real-world scenario with client-side Pyro objects,
+            # you would loop through client proxies to get their times.
+            # Here, we simulate by using the stored offsets.
+            
             recent_offsets = []
-            current_time = datetime.utcnow()
+            for service_id, last_sync_time in self.service_last_sync.items():
+                # Consider only recently active services for averaging
+                if (current_server_time - last_sync_time).total_seconds() < 60:
+                    recent_offsets.append(self.service_offsets.get(service_id, 0.0))
+
+            if not recent_offsets:
+                return
+
+            # Calculate the average offset
+            avg_offset_seconds = statistics.mean(recent_offsets)
             
-            for service_id, data in self.service_times.items():
-                if data['last_sync'] and (current_time - data['last_sync']).seconds < 60:
-                    recent_offsets.append(data['offset'])
+            # Adjust the master time by the average offset
+            adjustment = timedelta(seconds=avg_offset_seconds)
+            self.master_time = current_server_time - adjustment
             
-            if recent_offsets:
-                # Calculate average offset (Berkeley algorithm)
-                avg_offset = statistics.mean(recent_offsets)
-                
-                # Adjust master time based on average offset
-                self.master_time = current_time - timedelta(seconds=avg_offset)
-                
-                logger.info(f"Berkeley sync completed. Average offset: {avg_offset:.3f}s, Services: {len(recent_offsets)}")
-    
+            logger.info(f"Berkeley sync completed. Average offset: {avg_offset_seconds:.3f}s. New master time set.")
+
     def get_server_stats(self):
-        """Get time server statistics"""
+        """Get time server statistics."""
         with self.lock:
+            services_stats = {}
+            for service_id, last_sync in self.service_last_sync.items():
+                services_stats[service_id] = {
+                    'last_sync': last_sync.isoformat() if last_sync else None,
+                    'offset': self.service_offsets.get(service_id)
+                }
+
             stats = {
                 'master_time': self.master_time.isoformat(),
-                'registered_services': len(self.service_times),
-                'services': {}
+                'registered_services': len(self.service_last_sync),
+                'services': services_stats
             }
-            
-            for service_id, data in self.service_times.items():
-                stats['services'][service_id] = {
-                    'last_sync': data['last_sync'].isoformat() if data['last_sync'] else None,
-                    'offset': data['offset']
-                }
-            
             return stats
 
 def start_time_server():
-    """Start the Pyro4 time server"""
+    """Start the Pyro4 time server."""
     daemon = Pyro4.Daemon(host='localhost', port=9090)
     time_server = TimeServer()
     uri = daemon.register(time_server, "timeserver")

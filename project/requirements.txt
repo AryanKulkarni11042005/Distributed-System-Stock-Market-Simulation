@@ -1,7 +1,6 @@
 # Core Flask and Database
 pip install flask
-pip install flask-sqlalchemy
-pip install sqlalchemy
+pip install flask-cors
 
 # Distributed Computing
 pip install Pyro4
@@ -30,3 +29,5 @@ pip install jsonschema
 
 # Optional: For API documentation
 pip install flask-restx
+
+pip install pymongo dnspython

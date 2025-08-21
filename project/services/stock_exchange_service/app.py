@@ -6,13 +6,17 @@ import random
 import time
 import sys
 import os
+from datetime import datetime
+from bson import json_util
+import json
 
 # Add path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utils.config import load_config
 from utils.logger import setup_logger, log_with_sync_time
-from database.connection import init_db, db, Stock
+# Import the MongoDB collections from the updated connection script
+from database.connection import init_db, stocks_collection
 from utils.exceptions import StockNotFoundException
 
 app = Flask(__name__)
@@ -28,99 +32,106 @@ app.config.from_object(load_config())
 
 logger = setup_logger(__name__)
 
-# Initialize database
-init_db(app)
+# Initialize database (this will run init_sample_data if needed)
+init_db()
+
+def mongo_to_dict(obj):
+    """
+    Helper function to convert MongoDB documents (including ObjectId) to a JSON-serializable dictionary.
+    """
+    return json.loads(json_util.dumps(obj))
 
 @Pyro4.expose
 class StockExchangeRPC:
-    """Pyro4 RPC interface for Stock Exchange Service"""
-    
+    """Pyro4 RPC interface for Stock Exchange Service, now using MongoDB."""
+
     def get_stock_price(self, symbol):
-        """Get current stock price via RPC"""
+        """Get current stock price via RPC from MongoDB."""
         try:
-            with app.app_context():
-                stock = Stock.query.filter_by(symbol=symbol).first()
-                if not stock:
-                    raise StockNotFoundException(f"Stock {symbol} not found")
-                return stock.current_price
+            stock = stocks_collection.find_one({'symbol': symbol})
+            if not stock:
+                raise StockNotFoundException(f"Stock {symbol} not found")
+            return stock['current_price']
         except Exception as e:
             logger.error(f"RPC Error getting stock price for {symbol}: {e}")
             raise
-    
+
     def get_all_stocks(self):
-        """Get all stocks via RPC"""
+        """Get all stocks via RPC from MongoDB."""
         try:
-            with app.app_context():
-                stocks = Stock.query.all()
-                return [stock.to_dict() for stock in stocks]
+            stocks = list(stocks_collection.find({}))
+            return mongo_to_dict(stocks)
         except Exception as e:
             logger.error(f"RPC Error getting all stocks: {e}")
             raise
-    
+
     def get_stock(self, symbol):
-        """Get stock details via RPC"""
+        """Get stock details via RPC from MongoDB."""
         try:
-            with app.app_context():
-                stock = Stock.query.filter_by(symbol=symbol).first()
-                if not stock:
-                    raise StockNotFoundException(f"Stock {symbol} not found")
-                return stock.to_dict()
+            stock = stocks_collection.find_one({'symbol': symbol})
+            if not stock:
+                raise StockNotFoundException(f"Stock {symbol} not found")
+            return mongo_to_dict(stock)
         except Exception as e:
             logger.error(f"RPC Error getting stock {symbol}: {e}")
             raise
-    
+
     def update_stock_price(self, symbol, new_price):
-        """Update stock price via RPC"""
+        """Update stock price via RPC in MongoDB."""
         try:
-            with app.app_context():
-                stock = Stock.query.filter_by(symbol=symbol).first()
-                if not stock:
-                    raise StockNotFoundException(f"Stock {symbol} not found")
-                
-                old_price = stock.current_price
-                stock.current_price = new_price
-                stock.last_updated = db.func.now()
-                db.session.commit()
-                log_with_sync_time(logger, 20, f"Updated {symbol} price from {old_price} to {new_price}", 'stock_exchange')
-                return stock.to_dict()
+            stock = stocks_collection.find_one({'symbol': symbol})
+            if not stock:
+                raise StockNotFoundException(f"Stock {symbol} not found")
+
+            old_price = stock['current_price']
+            result = stocks_collection.update_one(
+                {'symbol': symbol},
+                {'$set': {'current_price': new_price, 'last_updated': datetime.utcnow()}}
+            )
+
+            if result.modified_count == 0:
+                raise Exception("Failed to update stock price.")
+
+            log_with_sync_time(logger, 20, f"Updated {symbol} price from {old_price} to {new_price}", 'stock_exchange')
+            return self.get_stock(symbol)
         except Exception as e:
             logger.error(f"RPC Error updating stock price for {symbol}: {e}")
             raise
 
 class PriceSimulator:
-    """Simulates stock price movements"""
-    
+    """Simulates stock price movements by updating MongoDB."""
+
     def __init__(self):
         self.running = True
-    
+
     def start_simulation(self):
-        """Start price simulation in background"""
+        """Start price simulation in background."""
         while self.running:
             try:
-                with app.app_context():
-                    stocks = Stock.query.all()
-                    updated_count = 0
-                    
-                    for stock in stocks:
-                        # Random price movement between -5% to +5%
-                        change_percent = random.uniform(-0.05, 0.05)
-                        new_price = stock.current_price * (1 + change_percent)
-                        new_price = round(max(new_price, 1.0), 2)  # Minimum price $1
-                        
-                        if new_price != stock.current_price:
-                            stock.current_price = new_price
-                            stock.last_updated = db.func.now()
-                            updated_count += 1
-                    
-                    if updated_count > 0:
-                        db.session.commit()
-                        log_with_sync_time(logger, 20, f"Price simulation updated {updated_count} stocks", 'stock_exchange')
-                
+                stocks = list(stocks_collection.find({}))
+                updated_count = 0
+
+                for stock in stocks:
+                    # Random price movement between -5% to +5%
+                    change_percent = random.uniform(-0.05, 0.05)
+                    new_price = stock['current_price'] * (1 + change_percent)
+                    new_price = round(max(new_price, 1.0), 2)  # Minimum price $1
+
+                    if new_price != stock['current_price']:
+                        stocks_collection.update_one(
+                            {'_id': stock['_id']},
+                            {'$set': {'current_price': new_price, 'last_updated': datetime.utcnow()}}
+                        )
+                        updated_count += 1
+
+                if updated_count > 0:
+                    log_with_sync_time(logger, 20, f"Price simulation updated {updated_count} stocks", 'stock_exchange')
+
                 time.sleep(10)  # Update every 10 seconds
             except Exception as e:
                 logger.error(f"Error in price simulation: {e}")
                 time.sleep(5)
-    
+
     def stop_simulation(self):
         """Stop price simulation"""
         self.running = False
@@ -160,7 +171,7 @@ def get_stock_price(symbol):
         exchange_service = StockExchangeRPC()
         price = exchange_service.get_stock_price(symbol.upper())
         sync_time = log_with_sync_time(logger, 20, f"REST: Retrieved price for {symbol.upper()}", 'stock_exchange')
-        
+
         return jsonify({
             'symbol': symbol.upper(),
             'price': price,
@@ -178,14 +189,14 @@ def update_stock_price(symbol):
     try:
         data = request.json
         new_price = data.get('price')
-        
-        if not new_price or new_price <= 0:
-            return jsonify({'error': 'Valid price is required'}), 400
-        
+
+        if not new_price or not isinstance(new_price, (int, float)) or new_price <= 0:
+            return jsonify({'error': 'Valid positive price is required'}), 400
+
         exchange_service = StockExchangeRPC()
-        updated_stock = exchange_service.update_stock_price(symbol.upper(), new_price)
+        updated_stock = exchange_service.update_stock_price(symbol.upper(), float(new_price))
         sync_time = log_with_sync_time(logger, 20, f"REST: Updated {symbol.upper()} price to {new_price}", 'stock_exchange')
-        
+
         return jsonify({
             'message': 'Stock price updated successfully',
             'stock': updated_stock,
@@ -201,27 +212,26 @@ def update_stock_price(symbol):
 def get_market_summary():
     """Get market summary"""
     try:
-        with app.app_context():
-            stocks = Stock.query.all()
-            
-            if not stocks:
-                return jsonify({'error': 'No stocks found'}), 404
-            
-            total_value = sum(stock.current_price for stock in stocks)
-            avg_price = total_value / len(stocks)
-            highest_price = max(stock.current_price for stock in stocks)
-            lowest_price = min(stock.current_price for stock in stocks)
-            
-            summary = {
-                'total_stocks': len(stocks),
-                'total_market_value': round(total_value, 2),
-                'average_price': round(avg_price, 2),
-                'highest_price': highest_price,
-                'lowest_price': lowest_price,
-                'stocks': [stock.to_dict() for stock in stocks]
-            }
-            
-            return jsonify({'market_summary': summary})
+        stocks = list(stocks_collection.find({}))
+
+        if not stocks:
+            return jsonify({'error': 'No stocks found'}), 404
+
+        total_value = sum(stock['current_price'] for stock in stocks)
+        avg_price = total_value / len(stocks)
+        highest_price = max(stock['current_price'] for stock in stocks)
+        lowest_price = min(stock['current_price'] for stock in stocks)
+
+        summary = {
+            'total_stocks': len(stocks),
+            'total_market_value': round(total_value, 2),
+            'average_price': round(avg_price, 2),
+            'highest_price': highest_price,
+            'lowest_price': lowest_price,
+            'stocks': mongo_to_dict(stocks)
+        }
+
+        return jsonify({'market_summary': summary})
     except Exception as e:
         logger.error(f"Error getting market summary: {e}")
         return jsonify({'error': str(e)}), 500
@@ -253,11 +263,11 @@ if __name__ == '__main__':
     # Start Pyro4 RPC server in background
     pyro_thread = threading.Thread(target=start_pyro_server, daemon=True)
     pyro_thread.start()
-    
+
     # Start price simulation in background
     sim_thread = threading.Thread(target=start_price_simulation, daemon=True)
     sim_thread.start()
-    
+
     # Register with time server
     try:
         config = load_config()
@@ -266,6 +276,6 @@ if __name__ == '__main__':
         logger.info("Registered with time server")
     except Exception as e:
         logger.warning(f"Could not register with time server: {e}")
-    
+
     logger.info("Starting Stock Exchange Service on port 5003")
     app.run(host='0.0.0.0', port=5003, debug=True, use_reloader=False)

@@ -14,10 +14,12 @@ import {
   AlertCircle,
   CheckCircle,
   Wallet,
-  BarChart3
+  BarChart3,
+  PlusCircle
 } from 'lucide-react';
 import { stockAPI, bankAPI, userAPI, tradeAPI, healthAPI } from '../../services/api';
 import toast from 'react-hot-toast';
+import AddFundsModal from '../../components/common/AddFundsModal'; // Import the new modal
 
 const Dashboard = () => {
   // State management
@@ -29,6 +31,7 @@ const Dashboard = () => {
   const [recentTrades, setRecentTrades] = useState([]);
   const [systemHealth, setSystemHealth] = useState(null);
   const [marketSummary, setMarketSummary] = useState(null);
+  const [isAddFundsModalOpen, setIsAddFundsModalOpen] = useState(false); // State for the modal
 
   // Auto-refresh timer
   useEffect(() => {
@@ -207,6 +210,11 @@ const Dashboard = () => {
       minimumFractionDigits: 2
     }).format(Number(amount));
   };
+  
+  // Callback function for when funds are added
+  const handleFundsAdded = (newBalance) => {
+    setUser(prevUser => ({ ...prevUser, balance: newBalance }));
+  };
 
   if (loading) {
     return (
@@ -238,14 +246,12 @@ const Dashboard = () => {
         
         <div className="flex items-center space-x-3">
           <button
-            onClick={refreshMarketData}
-            disabled={refreshing}
-            className="btn btn-outline btn-sm flex items-center space-x-2"
+            onClick={() => setIsAddFundsModalOpen(true)}
+            className="btn btn-success btn-sm flex items-center space-x-2"
           >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-            <span>Refresh</span>
+            <PlusCircle className="w-4 h-4" />
+            <span>Add Funds</span>
           </button>
-          
           <Link to="/trading" className="btn btn-primary btn-sm">
             Start Trading
           </Link>
@@ -335,7 +341,7 @@ const Dashboard = () => {
             </div>
             
             <div className="space-y-3">
-              {marketData && Array.isArray(marketData.stocks) && marketData.stocks.slice(0, 3).map((stock, index) => (
+              {marketData && Array.isArray(marketData) && marketData.slice(0, 3).map((stock, index) => (
                 <div key={index} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
                   <div className="flex items-center space-x-3">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
@@ -513,6 +519,13 @@ const Dashboard = () => {
           </div>
         </div>
       )}
+      
+      {/* Add Funds Modal */}
+      <AddFundsModal 
+        isOpen={isAddFundsModalOpen}
+        onClose={() => setIsAddFundsModalOpen(false)}
+        onFundsAdded={handleFundsAdded}
+      />
 
     </div>
   );

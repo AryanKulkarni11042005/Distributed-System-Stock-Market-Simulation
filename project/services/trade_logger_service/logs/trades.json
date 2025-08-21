@@ -1,0 +1,47 @@
+[
+  {
+    "user_id": "1755798182296",
+    "stock_symbol": "AAPL",
+    "trade_type": "buy",
+    "quantity": 2,
+    "price": 128.81,
+    "total_amount": 257.62,
+    "timestamp": {
+      "$date": "2025-08-21T19:14:22.796Z"
+    },
+    "sync_timestamp": null,
+    "_id": {
+      "$oid": "68a7700ef96f7be9be865d0c"
+    }
+  },
+  {
+    "user_id": "1755798182296",
+    "stock_symbol": "GOOGL",
+    "trade_type": "buy",
+    "quantity": 2,
+    "price": 2524.95,
+    "total_amount": 5049.9,
+    "timestamp": {
+      "$date": "2025-08-21T19:14:42.626Z"
+    },
+    "sync_timestamp": null,
+    "_id": {
+      "$oid": "68a77022f96f7be9be865d0d"
+    }
+  },
+  {
+    "user_id": "1755804431874",
+    "stock_symbol": "AAPL",
+    "trade_type": "buy",
+    "quantity": 15,
+    "price": 115.08,
+    "total_amount": 1726.2,
+    "timestamp": {
+      "$date": "2025-08-21T19:29:38.250Z"
+    },
+    "sync_timestamp": null,
+    "_id": {
+      "$oid": "68a773a2f96f7be9be865d0e"
+    }
+  }
+]

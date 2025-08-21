@@ -1,125 +1,107 @@
-from flask_sqlalchemy import SQLAlchemy
+import os
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure
 from datetime import datetime
+import urllib.parse
 
-db = SQLAlchemy()
+# It's a good practice to load sensitive information from environment variables.
+# Fallback to the provided connection string if the environment variable isn't set.
+MONGO_USER = os.getenv('MONGO_USER', 'aryankulkarni1104')
+MONGO_PASSWORD = os.getenv('MONGO_PASSWORD', 'Aryan@2005')
+MONGO_CLUSTER = os.getenv('MONGO_CLUSTER', 'cluster0.qxaih.mongodb.net')
+MONGO_DB_NAME = os.getenv('MONGO_DB_NAME', 'stock_market_simulation')
 
-class User(db.Model):
-    __tablename__ = 'users'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'username': self.username,
-            'email': self.email,
-            'created_at': self.created_at.isoformat()
-        }
+# URL-encode the password to handle special characters
+encoded_password = urllib.parse.quote_plus(MONGO_PASSWORD)
 
-class Portfolio(db.Model):
-    __tablename__ = 'portfolio'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    stock_symbol = db.Column(db.String(10), nullable=False)
-    quantity = db.Column(db.Integer, nullable=False, default=0)
-    avg_price = db.Column(db.Float, nullable=False, default=0.0)
-    
-    __table_args__ = (db.UniqueConstraint('user_id', 'stock_symbol'),)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'stock_symbol': self.stock_symbol,
-            'quantity': self.quantity,
-            'avg_price': self.avg_price
-        }
+# Construct the connection string
+MONGO_URI = f"mongodb+srv://{MONGO_USER}:{encoded_password}@{MONGO_CLUSTER}/{MONGO_DB_NAME}?retryWrites=true&w=majority"
 
-class BankAccount(db.Model):
-    __tablename__ = 'bank_accounts'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, nullable=False, unique=True)
-    balance = db.Column(db.Float, nullable=False, default=10000.0)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'balance': self.balance,
-            'created_at': self.created_at.isoformat()
-        }
+class MongoConnection:
+    """
+    Singleton class to manage MongoDB connection.
+    """
+    _instance = None
 
-class Stock(db.Model):
-    __tablename__ = 'stocks'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    symbol = db.Column(db.String(10), unique=True, nullable=False)
-    name = db.Column(db.String(100), nullable=False)
-    current_price = db.Column(db.Float, nullable=False)
-    last_updated = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'symbol': self.symbol,
-            'name': self.name,
-            'current_price': self.current_price,
-            'last_updated': self.last_updated.isoformat()
-        }
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(MongoConnection, cls).__new__(cls)
+            try:
+                cls._instance.client = MongoClient(MONGO_URI)
+                # The ismaster command is cheap and does not require auth.
+                cls._instance.client.admin.command('ismaster')
+                print("✅ MongoDB connection successful.")
+                cls._instance.db = cls._instance.client[MONGO_DB_NAME]
+            except ConnectionFailure as e:
+                print(f"❌ Could not connect to MongoDB: {e}")
+                cls._instance.client = None
+                cls._instance.db = None
+        return cls._instance
 
-class Trade(db.Model):
-    __tablename__ = 'trades'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, nullable=False)
-    stock_symbol = db.Column(db.String(10), nullable=False)
-    trade_type = db.Column(db.String(10), nullable=False)  # 'buy' or 'sell'
-    quantity = db.Column(db.Integer, nullable=False)
-    price = db.Column(db.Float, nullable=False)
-    total_amount = db.Column(db.Float, nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    sync_timestamp = db.Column(db.String(50))
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'stock_symbol': self.stock_symbol,
-            'trade_type': self.trade_type,
-            'quantity': self.quantity,
-            'price': self.price,
-            'total_amount': self.total_amount,
-            'timestamp': self.timestamp.isoformat(),
-            'sync_timestamp': self.sync_timestamp
-        }
+# Initialize the connection
+mongo_conn = MongoConnection()
+db = mongo_conn.db
 
-def init_db(app):
-    """Initialize database with Flask app"""
-    db.init_app(app)
-    with app.app_context():
-        db.create_all()
-        # Initialize sample data
+# Define collections for easy access throughout the application
+# This replaces the SQLAlchemy model classes
+if db is not None:
+    users_collection = db.users
+    portfolio_collection = db.portfolio
+    bank_accounts_collection = db.bank_accounts
+    stocks_collection = db.stocks
+    trades_collection = db.trades
+else:
+    # If connection fails, create dummy objects to prevent crashes on import
+    users_collection = None
+    portfolio_collection = None
+    bank_accounts_collection = None
+    stocks_collection = None
+    trades_collection = None
+
+
+def init_db(app=None):
+    """
+    Initializes the database with sample data.
+    The 'app' parameter is kept for compatibility with the existing app structure,
+    but is not used for the MongoDB connection itself.
+    """
+    if db is not None:
+        print("Initializing sample data...")
         init_sample_data()
+    else:
+        print("Skipping sample data initialization due to connection failure.")
+
 
 def init_sample_data():
-    """Initialize sample stocks"""
+    """
+    Initializes the stocks collection with sample data if it's empty.
+    This function is idempotent and safe to run multiple times.
+    """
+    if stocks_collection is None:
+        print("Stock collection not available.")
+        return
+
     sample_stocks = [
-        ('AAPL', 'Apple Inc.', 150.00),
-        ('GOOGL', 'Alphabet Inc.', 2800.00),
-        ('MSFT', 'Microsoft Corporation', 300.00),
-        ('TSLA', 'Tesla Inc.', 800.00),
-        ('AMZN', 'Amazon.com Inc.', 3300.00),
+        {'symbol': 'AAPL', 'name': 'Apple Inc.', 'current_price': 150.00, 'last_updated': datetime.utcnow()},
+        {'symbol': 'GOOGL', 'name': 'Alphabet Inc.', 'current_price': 2800.00, 'last_updated': datetime.utcnow()},
+        {'symbol': 'MSFT', 'name': 'Microsoft Corporation', 'current_price': 300.00, 'last_updated': datetime.utcnow()},
+        {'symbol': 'TSLA', 'name': 'Tesla Inc.', 'current_price': 800.00, 'last_updated': datetime.utcnow()},
+        {'symbol': 'AMZN', 'name': 'Amazon.com Inc.', 'current_price': 3300.00, 'last_updated': datetime.utcnow()},
     ]
-    
-    for symbol, name, price in sample_stocks:
-        if not Stock.query.filter_by(symbol=symbol).first():
-            stock = Stock(symbol=symbol, name=name, current_price=price)
-            db.session.add(stock)
-    
-    db.session.commit()
+
+    try:
+        for stock in sample_stocks:
+            # Using update_one with upsert=True is an idempotent way to insert if not exists
+            stocks_collection.update_one(
+                {'symbol': stock['symbol']},
+                {'$setOnInsert': stock},
+                upsert=True
+            )
+        print("✅ Sample stock data initialized successfully.")
+    except Exception as e:
+        print(f"❌ Error initializing sample data: {e}")
+
+# Note: The original SQLAlchemy models (User, Portfolio, etc.) and their `to_dict` methods
+# are no longer needed. PyMongo works with Python dictionaries directly.
+# The logic for creating, reading, updating, and deleting documents will now be handled
+# in your service files (e.g., user_service/app.py) using the collection objects defined above.

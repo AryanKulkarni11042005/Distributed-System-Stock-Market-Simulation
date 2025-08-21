@@ -5,8 +5,8 @@ load_dotenv()
 
 class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key')
-    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', 'sqlite:///stock_market.db')
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://aryankulkarni1104:Aryan%402005@cluster0.qxaih.mongodb.net/')
+    MONGO_DB_NAME = os.getenv('MONGO_DB_NAME', 'stock_market_simulation')
     
     # Service URLs
     USER_SERVICE_URL = os.getenv('USER_SERVICE_URL', 'http://localhost:5001')

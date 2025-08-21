@@ -30,14 +30,17 @@ const Navbar = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Check if user is logged in
+  // **FIX:** This useEffect now listens for changes to the URL (location.pathname).
+  // When the path changes (e.g., after login), it will re-run this check.
   useEffect(() => {
     const userId = localStorage.getItem('userId');
     const username = localStorage.getItem('username');
     if (userId && username) {
       setUser({ id: userId, username });
+    } else {
+      setUser(null); // Clear user if not logged in
     }
-  }, []);
+  }, [location.pathname]); // Dependency array now includes location.pathname
 
   // Mock services status check
   useEffect(() => {
@@ -67,6 +70,7 @@ const Navbar = () => {
     localStorage.removeItem('userId');
     localStorage.removeItem('username');
     localStorage.removeItem('authToken');
+    setUser(null); // Clear the user state on logout
     navigate('/login');
   };
 

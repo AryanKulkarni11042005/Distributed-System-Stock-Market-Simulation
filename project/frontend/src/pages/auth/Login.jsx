@@ -11,7 +11,7 @@ import {
   AlertCircle,
   Loader2
 } from 'lucide-react';
-import { userAPI } from '../../services/api';
+import { userAPI } from '../../services/api.js';
 import toast from 'react-hot-toast';
 
 const Login = () => {
@@ -132,7 +132,7 @@ const Login = () => {
     if (formData.username && formData.password) {
       // Generate mock user data
       const userData = {
-        id: Date.now().toString(),
+        _id: { "$oid": Date.now().toString() }, // Simulate MongoDB ID structure
         username: formData.username,
         email: formData.email || `${formData.username}@example.com`,
         balance: 10000,
@@ -140,7 +140,7 @@ const Login = () => {
       };
       
       // Store in localStorage
-      localStorage.setItem('userId', userData.id);
+      localStorage.setItem('userId', userData._id.$oid);
       localStorage.setItem('username', userData.username);
       localStorage.setItem('authToken', 'mock-jwt-token');
       
@@ -165,18 +165,31 @@ const Login = () => {
       if (response.data && response.data.user) {
         const userData = response.data.user;
         
+        // **FIX:** The user ID from MongoDB is in `userData._id.$oid`
+        // The original code was looking for `userData.id`, which is undefined.
+        const userId = userData._id?.$oid || userData._id;
+
+        if (!userId) {
+            throw new Error("User ID not found in registration response.");
+        }
+
         // Store user data
-        localStorage.setItem('userId', userData.id.toString());
+        localStorage.setItem('userId', userId.toString());
         localStorage.setItem('username', userData.username);
-        localStorage.setItem('authToken', 'mock-jwt-token');
+        localStorage.setItem('authToken', 'mock-jwt-token'); // Use a real token in production
         
         toast.success(`Account created successfully! Welcome, ${userData.username}!`);
         
         // Redirect to dashboard
         navigate('/', { replace: true });
+      } else {
+        // If the structure is not as expected, throw an error.
+        throw new Error('Invalid response from server during registration.');
       }
     } catch (error) {
-      throw new Error(error.response?.data?.error || 'Registration failed');
+      // Log the full error for debugging but show a generic message to the user.
+      console.error("Registration failed:", error);
+      throw new Error(error.response?.data?.error || 'Registration failed. Please try again.');
     }
   };
 

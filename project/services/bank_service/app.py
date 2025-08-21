@@ -4,13 +4,17 @@ import Pyro4
 import threading
 import sys
 import os
+from datetime import datetime
+from bson import json_util
+import json
 
 # Add path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utils.config import load_config
 from utils.logger import setup_logger, log_with_sync_time
-from database.connection import init_db, db, BankAccount
+# Import the MongoDB collections from the updated connection script
+from database.connection import init_db, bank_accounts_collection
 from utils.exceptions import InsufficientFundsException
 
 app = Flask(__name__)
@@ -26,85 +30,91 @@ app.config.from_object(load_config())
 
 logger = setup_logger(__name__)
 
-# Initialize database
-init_db(app)
+# Initialize database (this will run init_sample_data if needed)
+init_db()
+
+def mongo_to_dict(obj):
+    """
+    Helper function to convert MongoDB documents (including ObjectId) to a JSON-serializable dictionary.
+    """
+    return json.loads(json_util.dumps(obj))
 
 @Pyro4.expose
 class BankServiceRPC:
-    """Pyro4 RPC interface for Bank Service"""
-    
+    """Pyro4 RPC interface for Bank Service, now using MongoDB."""
+
+    def _get_or_create_account(self, user_id):
+        """Helper to find an account or create it if it doesn't exist."""
+        account = bank_accounts_collection.find_one({'user_id': user_id})
+        if not account:
+            config = load_config()
+            new_account = {
+                'user_id': user_id,
+                'balance': config.INITIAL_BALANCE,
+                'created_at': datetime.utcnow()
+            }
+            bank_accounts_collection.insert_one(new_account)
+            log_with_sync_time(logger, 20, f"Created bank account for user {user_id}", 'bank_service')
+            return new_account
+        return account
+
     def get_balance(self, user_id):
-        """Get account balance via RPC"""
+        """Get account balance via RPC from MongoDB."""
         try:
-            with app.app_context():
-                account = BankAccount.query.filter_by(user_id=user_id).first()
-                if not account:
-                    # Create account with initial balance
-                    config = load_config()
-                    account = BankAccount(user_id=user_id, balance=config.INITIAL_BALANCE)
-                    db.session.add(account)
-                    db.session.commit()
-                    log_with_sync_time(logger, 20, f"Created bank account for user {user_id}", 'bank_service')
-                
-                return account.balance
+            account = self._get_or_create_account(user_id)
+            return account['balance']
         except Exception as e:
             logger.error(f"RPC Error getting balance for user {user_id}: {e}")
             raise
-    
+
     def debit_account(self, user_id, amount):
-        """Debit amount from account via RPC"""
+        """Debit amount from account via RPC using atomic operations."""
         try:
-            with app.app_context():
-                account = BankAccount.query.filter_by(user_id=user_id).first()
-                if not account:
-                    config = load_config()
-                    account = BankAccount(user_id=user_id, balance=config.INITIAL_BALANCE)
-                    db.session.add(account)
-                    db.session.commit()
-                
-                if account.balance < amount:
-                    raise InsufficientFundsException(f"Insufficient funds. Available: {account.balance}, Required: {amount}")
-                
-                account.balance -= amount
-                db.session.commit()
-                log_with_sync_time(logger, 20, f"Debited {amount} from user {user_id}", 'bank_service')
-                return account.balance
+            account = self._get_or_create_account(user_id)
+            if account['balance'] < amount:
+                raise InsufficientFundsException(f"Insufficient funds. Available: {account['balance']}, Required: {amount}")
+
+            # Use atomic $inc operator to safely decrement the balance
+            result = bank_accounts_collection.update_one(
+                {'user_id': user_id},
+                {'$inc': {'balance': -amount}}
+            )
+
+            if result.modified_count == 0:
+                 raise Exception("Failed to debit account.")
+
+            log_with_sync_time(logger, 20, f"Debited {amount} from user {user_id}", 'bank_service')
+            return self.get_balance(user_id)
         except Exception as e:
             logger.error(f"RPC Error debiting account for user {user_id}: {e}")
             raise
-    
+
     def credit_account(self, user_id, amount):
-        """Credit amount to account via RPC"""
+        """Credit amount to account via RPC using atomic operations."""
         try:
-            with app.app_context():
-                account = BankAccount.query.filter_by(user_id=user_id).first()
-                if not account:
-                    config = load_config()
-                    account = BankAccount(user_id=user_id, balance=config.INITIAL_BALANCE)
-                    db.session.add(account)
-                    db.session.commit()
-                
-                account.balance += amount
-                db.session.commit()
-                log_with_sync_time(logger, 20, f"Credited {amount} to user {user_id}", 'bank_service')
-                return account.balance
+            # Ensure account exists before crediting
+            self._get_or_create_account(user_id)
+
+            # Use atomic $inc operator to safely increment the balance
+            result = bank_accounts_collection.update_one(
+                {'user_id': user_id},
+                {'$inc': {'balance': amount}}
+            )
+
+            if result.modified_count == 0:
+                 raise Exception("Failed to credit account.")
+
+            log_with_sync_time(logger, 20, f"Credited {amount} to user {user_id}", 'bank_service')
+            return self.get_balance(user_id)
         except Exception as e:
             logger.error(f"RPC Error crediting account for user {user_id}: {e}")
             raise
-    
+
     def get_account(self, user_id):
-        """Get full account details via RPC"""
+        """Get full account details via RPC from MongoDB."""
         try:
-            with app.app_context():
-                account = BankAccount.query.filter_by(user_id=user_id).first()
-                if not account:
-                    config = load_config()
-                    account = BankAccount(user_id=user_id, balance=config.INITIAL_BALANCE)
-                    db.session.add(account)
-                    db.session.commit()
-                    log_with_sync_time(logger, 20, f"Created bank account for user {user_id}", 'bank_service')
-                
-                return account.to_dict()
+            account = self._get_or_create_account(user_id)
+            return mongo_to_dict(account)
         except Exception as e:
             logger.error(f"RPC Error getting account for user {user_id}: {e}")
             raise
@@ -139,14 +149,14 @@ def debit_account():
         data = request.json
         user_id = data.get('user_id')
         amount = data.get('amount')
-        
-        if not user_id or not amount or amount <= 0:
-            return jsonify({'error': 'Valid user_id and amount are required'}), 400
-        
+
+        if not user_id or not isinstance(amount, (int, float)) or amount <= 0:
+            return jsonify({'error': 'Valid user_id and a positive amount are required'}), 400
+
         bank_service = BankServiceRPC()
-        new_balance = bank_service.debit_account(user_id, amount)
+        new_balance = bank_service.debit_account(user_id, float(amount))
         sync_time = log_with_sync_time(logger, 20, f"REST: Debited {amount} from user {user_id}", 'bank_service')
-        
+
         return jsonify({
             'message': 'Account debited successfully',
             'user_id': user_id,
@@ -167,14 +177,14 @@ def credit_account():
         data = request.json
         user_id = data.get('user_id')
         amount = data.get('amount')
-        
-        if not user_id or not amount or amount <= 0:
-            return jsonify({'error': 'Valid user_id and amount are required'}), 400
-        
+
+        if not user_id or not isinstance(amount, (int, float)) or amount <= 0:
+            return jsonify({'error': 'Valid user_id and a positive amount are required'}), 400
+
         bank_service = BankServiceRPC()
-        new_balance = bank_service.credit_account(user_id, amount)
+        new_balance = bank_service.credit_account(user_id, float(amount))
         sync_time = log_with_sync_time(logger, 20, f"REST: Credited {amount} to user {user_id}", 'bank_service')
-        
+
         return jsonify({
             'message': 'Account credited successfully',
             'user_id': user_id,
@@ -205,7 +215,7 @@ if __name__ == '__main__':
     # Start Pyro4 RPC server in background
     pyro_thread = threading.Thread(target=start_pyro_server, daemon=True)
     pyro_thread.start()
-    
+
     # Register with time server
     try:
         config = load_config()
@@ -214,6 +224,6 @@ if __name__ == '__main__':
         logger.info("Registered with time server")
     except Exception as e:
         logger.warning(f"Could not register with time server: {e}")
-    
+
     logger.info("Starting Bank Service on port 5002")
     app.run(host='0.0.0.0', port=5002, debug=True, use_reloader=False)
