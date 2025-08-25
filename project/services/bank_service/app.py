@@ -5,16 +5,14 @@ import threading
 import sys
 import os
 from datetime import datetime
-from bson import json_util
+from bson import json_util, ObjectId
 import json
 
-# Add path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utils.config import load_config
 from utils.logger import setup_logger, log_with_sync_time
-# Import the MongoDB collections from the updated connection script
-from database.connection import init_db, bank_accounts_collection
+from database.connection import init_db, bank_accounts_collection, users_collection
 from utils.exceptions import InsufficientFundsException
 
 app = Flask(__name__)
@@ -29,28 +27,25 @@ CORS(app, resources={
 app.config.from_object(load_config())
 
 logger = setup_logger(__name__)
-
-# Initialize database (this will run init_sample_data if needed)
 init_db()
 
 def mongo_to_dict(obj):
-    """
-    Helper function to convert MongoDB documents (including ObjectId) to a JSON-serializable dictionary.
-    """
     return json.loads(json_util.dumps(obj))
 
 @Pyro4.expose
 class BankServiceRPC:
-    """Pyro4 RPC interface for Bank Service, now using MongoDB."""
-
     def _get_or_create_account(self, user_id):
-        """Helper to find an account or create it if it doesn't exist."""
-        account = bank_accounts_collection.find_one({'user_id': user_id})
+        user_oid = ObjectId(user_id)
+        account = bank_accounts_collection.find_one({'user_id': user_oid})
         if not account:
+            if not users_collection.find_one({'_id': user_oid}):
+                raise Exception(f"User with ID {user_id} not found.")
+
             config = load_config()
             new_account = {
-                'user_id': user_id,
+                'user_id': user_oid,
                 'balance': config.INITIAL_BALANCE,
+                'transactions': [],
                 'created_at': datetime.utcnow()
             }
             bank_accounts_collection.insert_one(new_account)
@@ -59,7 +54,6 @@ class BankServiceRPC:
         return account
 
     def get_balance(self, user_id):
-        """Get account balance via RPC from MongoDB."""
         try:
             account = self._get_or_create_account(user_id)
             return account['balance']
@@ -68,16 +62,22 @@ class BankServiceRPC:
             raise
 
     def debit_account(self, user_id, amount):
-        """Debit amount from account via RPC using atomic operations."""
         try:
             account = self._get_or_create_account(user_id)
             if account['balance'] < amount:
                 raise InsufficientFundsException(f"Insufficient funds. Available: {account['balance']}, Required: {amount}")
 
-            # Use atomic $inc operator to safely decrement the balance
+            transaction = {
+                'type': 'debit',
+                'amount': amount,
+                'timestamp': datetime.utcnow()
+            }
             result = bank_accounts_collection.update_one(
-                {'user_id': user_id},
-                {'$inc': {'balance': -amount}}
+                {'user_id': ObjectId(user_id)},
+                {
+                    '$inc': {'balance': -amount},
+                    '$push': {'transactions': transaction}
+                }
             )
 
             if result.modified_count == 0:
@@ -90,15 +90,20 @@ class BankServiceRPC:
             raise
 
     def credit_account(self, user_id, amount):
-        """Credit amount to account via RPC using atomic operations."""
         try:
-            # Ensure account exists before crediting
             self._get_or_create_account(user_id)
-
-            # Use atomic $inc operator to safely increment the balance
+            
+            transaction = {
+                'type': 'credit',
+                'amount': amount,
+                'timestamp': datetime.utcnow()
+            }
             result = bank_accounts_collection.update_one(
-                {'user_id': user_id},
-                {'$inc': {'balance': amount}}
+                {'user_id': ObjectId(user_id)},
+                {
+                    '$inc': {'balance': amount},
+                    '$push': {'transactions': transaction}
+                }
             )
 
             if result.modified_count == 0:
@@ -111,7 +116,6 @@ class BankServiceRPC:
             raise
 
     def get_account(self, user_id):
-        """Get full account details via RPC from MongoDB."""
         try:
             account = self._get_or_create_account(user_id)
             return mongo_to_dict(account)
@@ -119,10 +123,8 @@ class BankServiceRPC:
             logger.error(f"RPC Error getting account for user {user_id}: {e}")
             raise
 
-# REST API Routes
-@app.route('/bank/account/<int:user_id>', methods=['GET'])
+@app.route('/bank/account/<string:user_id>', methods=['GET'])
 def get_account(user_id):
-    """Get bank account details"""
     try:
         bank_service = BankServiceRPC()
         account_data = bank_service.get_account(user_id)
@@ -131,9 +133,8 @@ def get_account(user_id):
         logger.error(f"Error getting account for user {user_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/bank/balance/<int:user_id>', methods=['GET'])
+@app.route('/bank/balance/<string:user_id>', methods=['GET'])
 def get_balance(user_id):
-    """Get account balance"""
     try:
         bank_service = BankServiceRPC()
         balance = bank_service.get_balance(user_id)
@@ -144,7 +145,6 @@ def get_balance(user_id):
 
 @app.route('/bank/debit', methods=['POST'])
 def debit_account():
-    """Debit amount from account"""
     try:
         data = request.json
         user_id = data.get('user_id')
@@ -172,7 +172,6 @@ def debit_account():
 
 @app.route('/bank/credit', methods=['POST'])
 def credit_account():
-    """Credit amount to account"""
     try:
         data = request.json
         user_id = data.get('user_id')
@@ -201,7 +200,6 @@ def health_check():
     return jsonify({'status': 'healthy', 'service': 'bank_service'})
 
 def start_pyro_server():
-    """Start Pyro4 RPC server"""
     try:
         daemon = Pyro4.Daemon(host='localhost', port=9092)
         bank_service_rpc = BankServiceRPC()
@@ -212,11 +210,9 @@ def start_pyro_server():
         logger.error(f"Error starting Pyro4 server: {e}")
 
 if __name__ == '__main__':
-    # Start Pyro4 RPC server in background
     pyro_thread = threading.Thread(target=start_pyro_server, daemon=True)
     pyro_thread.start()
 
-    # Register with time server
     try:
         config = load_config()
         time_server = Pyro4.Proxy(config.TIME_SERVER_URI)

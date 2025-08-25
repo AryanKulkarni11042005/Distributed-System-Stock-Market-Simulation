@@ -6,19 +6,14 @@ import {
   TrendingDown,
   ArrowUpRight,
   ArrowDownRight,
-  DollarSign,
   Calendar,
   Activity,
   Download,
   RefreshCw,
   Wallet,
-  BarChart3,
   Target,
-  Clock,
   Plus,
-  Minus,
-  Eye,
-  ShoppingCart
+  Minus
 } from 'lucide-react';
 import { userAPI, bankAPI, stockAPI, tradeAPI } from '../../services/api';
 import toast from 'react-hot-toast';
@@ -27,7 +22,7 @@ const Portfolio = () => {
   // State management
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [portfolio, setPortfolio] = useState([]);
+  const [portfolio, setPortfolio] = useState({ holdings: [] });
   const [userBalance, setUserBalance] = useState(0);
   const [currentStockPrices, setCurrentStockPrices] = useState({});
   const [tradeHistory, setTradeHistory] = useState([]);
@@ -44,7 +39,6 @@ const Portfolio = () => {
   useEffect(() => {
     loadPortfolioData();
     
-    // Auto-refresh every 30 seconds
     const interval = setInterval(() => {
       refreshPortfolioData();
     }, 30000);
@@ -61,12 +55,15 @@ const Portfolio = () => {
   const loadPortfolioData = async () => {
     setLoading(true);
     try {
-      await Promise.all([
-        loadUserPortfolio(),
-        loadUserBalance(),
-        loadCurrentStockPrices(),
-        loadTradeHistory()
-      ]);
+      const userId = localStorage.getItem('userId');
+      if (userId) {
+        await Promise.all([
+          loadUserPortfolio(userId),
+          loadUserBalance(userId),
+          loadCurrentStockPrices(),
+          loadTradeHistory(userId)
+        ]);
+      }
     } catch (error) {
       console.error('Error loading portfolio data:', error);
       toast.error('Failed to load portfolio data');
@@ -75,80 +72,62 @@ const Portfolio = () => {
     }
   };
 
-  // Load user portfolio
-  const loadUserPortfolio = async () => {
+  const loadUserPortfolio = async (userId) => {
     try {
-      const userId = localStorage.getItem('userId');
-      if (userId) {
-        const response = await userAPI.getUserPortfolio(userId);
-        setPortfolio(response.data.portfolio || getMockPortfolio());
-      }
+      const response = await userAPI.getUserPortfolio(userId);
+      setPortfolio(response.data.portfolio || { holdings: [] });
     } catch (error) {
       console.error('Error loading portfolio:', error);
-      setPortfolio(getMockPortfolio());
     }
   };
 
-  // Load user balance
-  const loadUserBalance = async () => {
+  const loadUserBalance = async (userId) => {
     try {
-      const userId = localStorage.getItem('userId');
-      if (userId) {
-        const response = await bankAPI.getBalance(userId);
-        setUserBalance(response.data.balance || 10000);
-      }
+      const response = await bankAPI.getBalance(userId);
+      setUserBalance(response.data.balance || 0);
     } catch (error) {
       console.error('Error loading balance:', error);
-      setUserBalance(10000);
     }
   };
 
-  // Load current stock prices
   const loadCurrentStockPrices = async () => {
     try {
       const response = await stockAPI.getAllStocks();
       const pricesMap = {};
-      
       if (response.data.stocks) {
         response.data.stocks.forEach(stock => {
           pricesMap[stock.symbol] = {
             current_price: stock.current_price,
-            price_change: stock.price_change,
-            change_percent: stock.change_percent
+            price_change: stock.price_change || 0,
+            change_percent: stock.change_percent || 0
           };
         });
       }
-      
       setCurrentStockPrices(pricesMap);
     } catch (error) {
       console.error('Error loading stock prices:', error);
-      // Use mock prices
-      setCurrentStockPrices(getMockStockPrices());
     }
   };
 
-  // Load trade history
-  const loadTradeHistory = async () => {
+  const loadTradeHistory = async (userId) => {
     try {
-      const userId = localStorage.getItem('userId');
-      if (userId) {
-        const response = await tradeAPI.getUserTrades(userId);
-        setTradeHistory(response.data.trades || getMockTradeHistory());
-      }
+      const response = await tradeAPI.getUserTrades(userId);
+      setTradeHistory(response.data.trades || []);
     } catch (error) {
       console.error('Error loading trade history:', error);
-      setTradeHistory(getMockTradeHistory());
     }
   };
 
-  // Refresh portfolio data
   const refreshPortfolioData = async () => {
     setRefreshing(true);
     try {
-      await Promise.all([
-        loadUserPortfolio(),
-        loadCurrentStockPrices()
-      ]);
+      const userId = localStorage.getItem('userId');
+      if(userId) {
+        await Promise.all([
+          loadUserPortfolio(userId),
+          loadCurrentStockPrices()
+        ]);
+      }
     } catch (error) {
       console.error('Error refreshing portfolio:', error);
     } finally {
@@ -156,35 +135,30 @@ const Portfolio = () => {
     }
   };
 
-  // Calculate portfolio statistics
   const calculatePortfolioStats = () => {
-    if (!portfolio.length || !Object.keys(currentStockPrices).length) {
+    if (!portfolio || !portfolio.holdings || Object.keys(currentStockPrices).length === 0) {
       return;
     }
 
-    let totalValue = 0;
+    let totalHoldingsValue = 0;
     let totalCost = 0;
     let dayChange = 0;
 
-    portfolio.forEach(holding => {
+    portfolio.holdings.forEach(holding => {
       const stockPrice = currentStockPrices[holding.stock_symbol];
       if (stockPrice) {
-        const currentValue = holding.quantity * stockPrice.current_price;
-        const costBasis = holding.quantity * holding.average_price;
-        const dayChangeValue = holding.quantity * (stockPrice.price_change || 0);
-
-        totalValue += currentValue;
-        totalCost += costBasis;
-        dayChange += dayChangeValue;
+        totalHoldingsValue += holding.quantity * stockPrice.current_price;
+        totalCost += holding.quantity * holding.avg_price;
+        dayChange += holding.quantity * stockPrice.price_change;
       }
     });
 
-    const totalGainLoss = totalValue - totalCost;
+    const totalGainLoss = totalHoldingsValue - totalCost;
     const totalGainLossPercent = totalCost > 0 ? (totalGainLoss / totalCost) * 100 : 0;
-    const dayChangePercent = totalValue > 0 ? (dayChange / (totalValue - dayChange)) * 100 : 0;
+    const dayChangePercent = (totalHoldingsValue - dayChange) > 0 ? (dayChange / (totalHoldingsValue - dayChange)) * 100 : 0;
 
     setPortfolioStats({
-      totalValue: totalValue + userBalance,
+      totalValue: totalHoldingsValue + userBalance,
       totalGainLoss,
       totalGainLossPercent,
       dayChange,
@@ -192,49 +166,20 @@ const Portfolio = () => {
     });
   };
 
-  // Mock data functions
-  const getMockPortfolio = () => [
-    { stock_symbol: 'AAPL', quantity: 10, average_price: 145.50, purchase_date: '2024-01-15' },
-    { stock_symbol: 'GOOGL', quantity: 2, average_price: 2800.00, purchase_date: '2024-01-20' },
-    { stock_symbol: 'MSFT', quantity: 5, average_price: 300.25, purchase_date: '2024-02-01' },
-    { stock_symbol: 'TSLA', quantity: 3, average_price: 900.00, purchase_date: '2024-02-10' }
-  ];
-
-  const getMockStockPrices = () => ({
-    'AAPL': { current_price: 150.25, price_change: 2.15, change_percent: 1.45 },
-    'GOOGL': { current_price: 2750.80, price_change: -15.30, change_percent: -0.55 },
-    'MSFT': { current_price: 310.45, price_change: 5.20, change_percent: 1.70 },
-    'TSLA': { current_price: 850.75, price_change: -12.85, change_percent: -1.49 }
-  });
-
-  const getMockTradeHistory = () => [
-    { trade_id: 1, stock_symbol: 'AAPL', trade_type: 'buy', quantity: 10, price: 145.50, total_amount: 1455.00, timestamp: '2024-01-15T10:30:00Z' },
-    { trade_id: 2, stock_symbol: 'GOOGL', trade_type: 'buy', quantity: 2, price: 2800.00, total_amount: 5600.00, timestamp: '2024-01-20T14:15:00Z' },
-    { trade_id: 3, stock_symbol: 'MSFT', trade_type: 'buy', quantity: 5, price: 300.25, total_amount: 1501.25, timestamp: '2024-02-01T09:45:00Z' },
-    { trade_id: 4, stock_symbol: 'TSLA', trade_type: 'buy', quantity: 3, price: 900.00, total_amount: 2700.00, timestamp: '2024-02-10T16:20:00Z' }
-  ];
-
-  // Utility functions
   const formatCurrency = (amount) => {
-    if (amount === undefined || amount === null || isNaN(amount)) {
-      return '$0.00';
-    }
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2
-    }).format(Number(amount));
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
   };
 
   const formatPercent = (percent) => {
-    if (percent === undefined || percent === null || isNaN(percent)) {
-      return '0.00%';
-    }
-    return `${Number(percent) >= 0 ? '+' : ''}${Number(percent).toFixed(2)}%`;
+    const p = percent || 0;
+    return `${p >= 0 ? '+' : ''}${p.toFixed(2)}%`;
   };
 
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    if(!dateString) return 'N/A';
+    // Check if the date is in MongoDB's format {$date: "..."}
+    const dateValue = dateString.$date || dateString;
+    return new Date(dateValue).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric'
@@ -248,17 +193,16 @@ const Portfolio = () => {
 
   const getHoldingGainLoss = (holding) => {
     const currentValue = getHoldingValue(holding);
-    const costBasis = holding.quantity * holding.average_price;
+    const costBasis = holding.quantity * holding.avg_price;
     return currentValue - costBasis;
   };
 
   const getHoldingGainLossPercent = (holding) => {
     const gainLoss = getHoldingGainLoss(holding);
-    const costBasis = holding.quantity * holding.average_price;
+    const costBasis = holding.quantity * holding.avg_price;
     return costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
   };
 
-  // Filter trade history by timeframe
   const getFilteredTradeHistory = () => {
     if (selectedTimeframe === 'all') return tradeHistory;
     
@@ -279,9 +223,10 @@ const Portfolio = () => {
         return tradeHistory;
     }
     
-    return tradeHistory.filter(trade => 
-      new Date(trade.timestamp) >= cutoffDate
-    );
+    return tradeHistory.filter(trade => {
+      const tradeDate = new Date(trade.timestamp.$date || trade.timestamp);
+      return tradeDate >= cutoffDate;
+    });
   };
 
   if (loading) {
@@ -298,7 +243,6 @@ const Portfolio = () => {
   return (
     <div className="space-y-6">
       
-      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold text-slate-900">
@@ -325,10 +269,8 @@ const Portfolio = () => {
         </div>
       </div>
 
-      {/* Portfolio Summary */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         
-        {/* Total Portfolio Value */}
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
@@ -343,7 +285,6 @@ const Portfolio = () => {
           </div>
         </div>
 
-        {/* Total Gain/Loss */}
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
@@ -371,7 +312,6 @@ const Portfolio = () => {
           </div>
         </div>
 
-        {/* Day Change */}
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
@@ -399,7 +339,6 @@ const Portfolio = () => {
           </div>
         </div>
 
-        {/* Available Cash */}
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
@@ -416,10 +355,8 @@ const Portfolio = () => {
 
       </div>
 
-      {/* Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
-        {/* Holdings */}
         <div className="space-y-6">
           <div className="card">
             <div className="card-header">
@@ -431,9 +368,9 @@ const Portfolio = () => {
               </p>
             </div>
 
-            {portfolio.length > 0 ? (
+            {portfolio && portfolio.holdings && portfolio.holdings.length > 0 ? (
               <div className="space-y-4">
-                {portfolio.map((holding, index) => {
+                {portfolio.holdings.map((holding, index) => {
                   const stockPrice = currentStockPrices[holding.stock_symbol];
                   const currentValue = getHoldingValue(holding);
                   const gainLoss = getHoldingGainLoss(holding);
@@ -447,7 +384,7 @@ const Portfolio = () => {
                             {holding.stock_symbol}
                           </div>
                           <div className="text-sm text-slate-600">
-                            {holding.quantity} shares @ {formatCurrency(holding.average_price)}
+                            {holding.quantity} shares @ {formatCurrency(holding.avg_price)}
                           </div>
                         </div>
                         <div className="text-right">
@@ -480,22 +417,6 @@ const Portfolio = () => {
                           Since {formatDate(holding.purchase_date)}
                         </div>
                       </div>
-
-                      {/* Progress bar for allocation */}
-                      <div className="mt-3">
-                        <div className="flex justify-between text-xs text-slate-600 mb-1">
-                          <span>Portfolio allocation</span>
-                          <span>{((currentValue / (portfolioStats.totalValue - userBalance)) * 100).toFixed(1)}%</span>
-                        </div>
-                        <div className="w-full bg-slate-200 rounded-full h-1.5">
-                          <div 
-                            className="bg-blue-600 h-1.5 rounded-full" 
-                            style={{ 
-                              width: `${Math.min(((currentValue / (portfolioStats.totalValue - userBalance)) * 100), 100)}%` 
-                            }}
-                          ></div>
-                        </div>
-                      </div>
                     </div>
                   );
                 })}
@@ -517,7 +438,6 @@ const Portfolio = () => {
           </div>
         </div>
 
-        {/* Trade History */}
         <div className="space-y-6">
           <div className="card">
             <div className="card-header">

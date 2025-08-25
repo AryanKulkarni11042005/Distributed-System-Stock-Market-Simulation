@@ -1,2 +1,3 @@
 id,user_id,stock_symbol,trade_type,quantity,price,total_amount,timestamp,sync_timestamp
 4,1755795602253,AAPL,buy,5,186.74,933.7,2025-08-21T17:02:08.590538,
+68acab0ddf3f6bc515df4e00,68aca85b14743bf70ec73c4d,AAPL,buy,5,79.15,395.75,2025-08-25T18:27:25.790604,

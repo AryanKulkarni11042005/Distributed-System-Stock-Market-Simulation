@@ -43,5 +43,22 @@
     "_id": {
       "$oid": "68a773a2f96f7be9be865d0e"
     }
+  },
+  {
+    "user_id": {
+      "$oid": "68acafeaabbe50b937fe9755"
+    },
+    "stock_symbol": "AAPL",
+    "trade_type": "buy",
+    "quantity": 4,
+    "price": 65.08,
+    "total_amount": 260.32,
+    "timestamp": {
+      "$date": "2025-08-25T18:49:35.440Z"
+    },
+    "sync_timestamp": null,
+    "_id": {
+      "$oid": "68acb03fc4648901ce467686"
+    }
   }
 ]

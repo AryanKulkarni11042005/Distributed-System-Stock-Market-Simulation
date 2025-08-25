@@ -19,25 +19,24 @@ import {
 } from 'lucide-react';
 import { stockAPI, bankAPI, userAPI, tradeAPI, healthAPI } from '../../services/api';
 import toast from 'react-hot-toast';
-import AddFundsModal from '../../components/common/AddFundsModal'; // Import the new modal
+import AddFundsModal from '../../components/common/AddFundsModal';
 
 const Dashboard = () => {
   // State management
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [user, setUser] = useState(null);
-  const [marketData, setMarketData] = useState(null);
-  const [portfolio, setPortfolio] = useState(null);
+  const [marketData, setMarketData] = useState([]);
+  const [portfolio, setPortfolio] = useState({ holdings: [] });
   const [recentTrades, setRecentTrades] = useState([]);
-  const [systemHealth, setSystemHealth] = useState(null);
-  const [marketSummary, setMarketSummary] = useState(null);
-  const [isAddFundsModalOpen, setIsAddFundsModalOpen] = useState(false); // State for the modal
+  const [systemHealth, setSystemHealth] = useState([]);
+  const [marketSummary, setMarketSummary] = useState({});
+  const [isAddFundsModalOpen, setIsAddFundsModalOpen] = useState(false);
 
   // Auto-refresh timer
   useEffect(() => {
     loadDashboardData();
     
-    // Set up auto-refresh every 30 seconds
     const interval = setInterval(() => {
       refreshMarketData();
     }, 30000);
@@ -49,13 +48,16 @@ const Dashboard = () => {
   const loadDashboardData = async () => {
     setLoading(true);
     try {
-      await Promise.all([
-        loadUserData(),
-        loadMarketData(),
-        loadPortfolioData(),
-        loadRecentTrades(),
-        checkSystemHealth()
-      ]);
+      const userId = localStorage.getItem('userId');
+      if (userId) {
+        await Promise.all([
+          loadUserData(userId),
+          loadMarketData(),
+          loadPortfolioData(userId),
+          loadRecentTrades(userId),
+          checkSystemHealth()
+        ]);
+      }
     } catch (error) {
       console.error('Error loading dashboard:', error);
       toast.error('Failed to load dashboard data');
@@ -65,28 +67,17 @@ const Dashboard = () => {
   };
 
   // Load user data
-  const loadUserData = async () => {
+  const loadUserData = async (userId) => {
     try {
-      const userId = localStorage.getItem('userId');
       const username = localStorage.getItem('username');
-      
-      if (userId) {
-        // Get user balance
-        const balanceResponse = await bankAPI.getBalance(userId);
-        setUser({
-          id: userId,
-          username: username,
-          balance: balanceResponse.data.balance || 10000
-        });
-      }
+      const balanceResponse = await bankAPI.getBalance(userId);
+      setUser({
+        id: userId,
+        username: username,
+        balance: balanceResponse.data.balance || 0
+      });
     } catch (error) {
       console.error('Error loading user data:', error);
-      // Use fallback data
-      setUser({
-        id: localStorage.getItem('userId'),
-        username: localStorage.getItem('username'),
-        balance: 10000
-      });
     }
   };
 
@@ -97,42 +88,31 @@ const Dashboard = () => {
         stockAPI.getAllStocks(),
         stockAPI.getMarketSummary()
       ]);
-      
       setMarketData(stocksResponse.data.stocks || []);
-      setMarketSummary(marketSummaryResponse.data || {});
+      setMarketSummary(marketSummaryResponse.data.market_summary || {});
     } catch (error) {
       console.error('Error loading market data:', error);
-      // Use mock data as fallback
-      setMarketData(getMockStocks());
-      setMarketSummary(getMockMarketSummary());
     }
   };
 
   // Load portfolio data
-  const loadPortfolioData = async () => {
+  const loadPortfolioData = async (userId) => {
     try {
-      const userId = localStorage.getItem('userId');
-      if (userId) {
-        const response = await userAPI.getUserPortfolio(userId);
-        setPortfolio(response.data.portfolio || []);
-      }
+      const response = await userAPI.getUserPortfolio(userId);
+      setPortfolio(response.data.portfolio || { holdings: [] });
     } catch (error) {
       console.error('Error loading portfolio:', error);
-      setPortfolio([]);
+      setPortfolio({ holdings: [] });
     }
   };
 
   // Load recent trades
-  const loadRecentTrades = async () => {
+  const loadRecentTrades = async (userId) => {
     try {
-      const userId = localStorage.getItem('userId');
-      if (userId) {
-        const response = await tradeAPI.getUserTrades(userId);
-        setRecentTrades(response.data.trades?.slice(0, 5) || []);
-      }
+      const response = await tradeAPI.getUserTrades(userId);
+      setRecentTrades(response.data.trades?.slice(0, 5) || []);
     } catch (error) {
       console.error('Error loading trades:', error);
-      setRecentTrades([]);
     }
   };
 
@@ -143,12 +123,6 @@ const Dashboard = () => {
       setSystemHealth(health);
     } catch (error) {
       console.error('Error checking system health:', error);
-      setSystemHealth([
-        { name: 'User Service', status: 'unhealthy' },
-        { name: 'Bank Service', status: 'unhealthy' },
-        { name: 'Stock Exchange', status: 'unhealthy' },
-        { name: 'Trade Logger', status: 'unhealthy' }
-      ]);
     }
   };
 
@@ -156,7 +130,11 @@ const Dashboard = () => {
   const refreshMarketData = async () => {
     setRefreshing(true);
     try {
+      const userId = localStorage.getItem('userId');
       await loadMarketData();
+      if(userId) {
+        await loadPortfolioData(userId);
+      }
     } catch (error) {
       console.error('Error refreshing market data:', error);
     } finally {
@@ -164,54 +142,25 @@ const Dashboard = () => {
     }
   };
 
-  // Mock data fallbacks
-  const getMockStocks = () => [
-    { symbol: 'AAPL', name: 'Apple Inc.', current_price: 150.25, price_change: 2.15, change_percent: 1.45 },
-    { symbol: 'GOOGL', name: 'Alphabet Inc.', current_price: 2750.80, price_change: -15.30, change_percent: -0.55 },
-    { symbol: 'MSFT', name: 'Microsoft Corp.', current_price: 310.45, price_change: 5.20, change_percent: 1.70 },
-    { symbol: 'TSLA', name: 'Tesla Inc.', current_price: 850.75, price_change: -12.85, change_percent: -1.49 },
-    { symbol: 'AMZN', name: 'Amazon.com Inc.', current_price: 3380.25, price_change: 8.90, change_percent: 0.26 }
-  ];
-
-  const getMockMarketSummary = () => ({
-    total_volume: 125000,
-    active_stocks: 5,
-    gainers: 3,
-    losers: 2,
-    last_updated: new Date().toISOString()
-  });
-
   // Calculate portfolio value
   const calculatePortfolioValue = () => {
-    if (!portfolio || !marketData) return 0;
+    if (!portfolio || !portfolio.holdings || !marketData) return 0;
     
-    return portfolio.reduce((total, holding) => {
+    return portfolio.holdings.reduce((total, holding) => {
       const stock = marketData.find(s => s.symbol === holding.stock_symbol);
       return total + (holding.quantity * (stock?.current_price || 0));
     }, 0);
   };
-
-  // Update the formatPercent function
-  const formatPercent = (percent) => {
-    if (percent === undefined || percent === null || isNaN(percent)) {
-      return '0.00%';
-    }
-    return `${Number(percent) >= 0 ? '+' : ''}${Number(percent).toFixed(2)}%`;
-  };
-
-  // Update the formatCurrency function
+  
   const formatCurrency = (amount) => {
-    if (amount === undefined || amount === null || isNaN(amount)) {
-      return '$0.00';
-    }
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2
-    }).format(Number(amount));
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
   };
   
-  // Callback function for when funds are added
+  const formatPercent = (percent) => {
+    const p = percent || 0;
+    return `${p >= 0 ? '+' : ''}${p.toFixed(2)}%`;
+  };
+
   const handleFundsAdded = (newBalance) => {
     setUser(prevUser => ({ ...prevUser, balance: newBalance }));
   };
@@ -261,7 +210,6 @@ const Dashboard = () => {
       {/* Key Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         
-        {/* Total Portfolio Value */}
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
@@ -276,7 +224,6 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Available Cash */}
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
@@ -291,7 +238,6 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Portfolio Value */}
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
@@ -306,13 +252,12 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Active Positions */}
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-slate-600">Active Positions</p>
               <p className="text-2xl font-bold text-slate-900">
-                {portfolio?.length || 0}
+                {portfolio?.holdings?.length || 0}
               </p>
             </div>
             <div className="w-12 h-12 bg-amber-100 rounded-lg flex items-center justify-center">
@@ -328,8 +273,6 @@ const Dashboard = () => {
         
         {/* Market Overview */}
         <div className="lg:col-span-2 space-y-6">
-          
-          {/* Top Stocks */}
           <div className="card">
             <div className="card-header">
               <h3 className="text-lg font-semibold text-slate-900">
@@ -341,7 +284,7 @@ const Dashboard = () => {
             </div>
             
             <div className="space-y-3">
-              {marketData && Array.isArray(marketData) && marketData.slice(0, 3).map((stock, index) => (
+              {marketData.slice(0, 3).map((stock, index) => (
                 <div key={index} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
                   <div className="flex items-center space-x-3">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
@@ -389,13 +332,10 @@ const Dashboard = () => {
               </Link>
             </div>
           </div>
-
         </div>
 
         {/* Sidebar */}
         <div className="space-y-6">
-          
-          {/* System Health */}
           <div className="card">
             <div className="card-header">
               <h3 className="text-lg font-semibold text-slate-900">
@@ -434,7 +374,6 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* Recent Activity */}
           <div className="card">
             <div className="card-header">
               <h3 className="text-lg font-semibold text-slate-900">
@@ -484,7 +423,6 @@ const Dashboard = () => {
               </Link>
             </div>
           </div>
-
         </div>
       </div>
 
@@ -494,33 +432,32 @@ const Dashboard = () => {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
             <div>
               <div className="text-2xl font-bold text-slate-900">
-                {marketSummary.total_volume?.toLocaleString() || '0'}
+                {marketSummary.total_stocks?.toLocaleString() || '0'}
               </div>
-              <div className="text-sm text-slate-600">Total Volume</div>
+              <div className="text-sm text-slate-600">Total Stocks</div>
             </div>
             <div>
               <div className="text-2xl font-bold text-slate-900">
-                {marketSummary.active_stocks || 0}
+                {formatCurrency(marketSummary.total_market_value)}
               </div>
-              <div className="text-sm text-slate-600">Active Stocks</div>
+              <div className="text-sm text-slate-600">Market Value</div>
             </div>
             <div>
               <div className="text-2xl font-bold text-emerald-600">
-                {marketSummary.gainers || 0}
+                {formatCurrency(marketSummary.highest_price)}
               </div>
-              <div className="text-sm text-slate-600">Gainers</div>
+              <div className="text-sm text-slate-600">Highest Price</div>
             </div>
             <div>
               <div className="text-2xl font-bold text-red-600">
-                {marketSummary.losers || 0}
+                {formatCurrency(marketSummary.lowest_price)}
               </div>
-              <div className="text-sm text-slate-600">Losers</div>
+              <div className="text-sm text-slate-600">Lowest Price</div>
             </div>
           </div>
         </div>
       )}
       
-      {/* Add Funds Modal */}
       <AddFundsModal 
         isOpen={isAddFundsModalOpen}
         onClose={() => setIsAddFundsModalOpen(false)}

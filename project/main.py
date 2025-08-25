@@ -98,7 +98,10 @@ class ServiceOrchestrator:
         
         for service in self.services:
             try:
-                logger.info(f"Starting {service['name']} on port {service['port']}...")
+                if 'port' in service:
+                    logger.info(f"Starting {service['name']} on port {service['port']}...")
+                else:
+                    logger.info(f"Starting {service['name']}...")
                 
                 # Start the service
                 process = subprocess.Popen([
@@ -110,12 +113,15 @@ class ServiceOrchestrator:
                 bufsize=1
                 )
                 
-                self.processes.append({
+                proc_info = {
                     'name': service['name'],
                     'process': process,
-                    'port': service['port'],
                     'script': service['script']
-                })
+                }
+                if 'port' in service:
+                    proc_info['port'] = service['port']
+
+                self.processes.append(proc_info)
                 
                 # Wait for service to start
                 time.sleep(service['startup_delay'])
@@ -125,6 +131,9 @@ class ServiceOrchestrator:
                     logger.info(f"✓ {service['name']} started successfully")
                 else:
                     logger.error(f"✗ {service['name']} failed to start")
+                    # Capture and print the error output from the failed service
+                    output, _ = process.communicate()
+                    logger.error(f"Error output for {service['name']}:\n{output}")
                     
             except Exception as e:
                 logger.error(f"Error starting {service['name']}: {e}")
@@ -166,7 +175,8 @@ class ServiceOrchestrator:
         for proc_info in self.processes:
             status = "RUNNING" if proc_info['process'].poll() is None else "STOPPED"
             status_symbol = "✓" if status == "RUNNING" else "✗"
-            logger.info(f"{status_symbol} {proc_info['name']:<25} Port: {proc_info['port']:<6} Status: {status}")
+            port_info = f"Port: {proc_info['port']:<6}" if 'port' in proc_info else "Port: N/A   "
+            logger.info(f"{status_symbol} {proc_info['name']:<25} {port_info} Status: {status}")
         
         logger.info("="*70)
         logger.info("SERVICE ENDPOINTS:")
@@ -228,12 +238,15 @@ class ServiceOrchestrator:
                         sys.executable, service['script']
                     ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                     
-                    self.processes.append({
+                    proc_info = {
                         'name': service['name'],
                         'process': process,
-                        'port': service['port'],
                         'script': service['script']
-                    })
+                    }
+                    if 'port' in service:
+                        proc_info['port'] = service['port']
+
+                    self.processes.append(proc_info)
                     
                     time.sleep(service['startup_delay'])
                     

@@ -55,12 +55,13 @@ const apiCall = async (url, options = {}) => {
       },
       ...options
     });
+
+    const data = await response.json();
     
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      throw new Error(data.error || `HTTP error! status: ${response.status}`);
     }
     
-    const data = await response.json();
     console.log(`[REAL] API response:`, data);
     return { data }; // Standardize response format
     
@@ -73,17 +74,20 @@ const apiCall = async (url, options = {}) => {
 
 // User Service API
 export const userAPI = {
-  // FIX: Endpoint changed from /create_user to /user/create
+  // NEW: Login endpoint
+  login: (credentials) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/login`, {
+    method: 'POST',
+    body: JSON.stringify(credentials)
+  }),
+  
+  // UPDATED: Now sends password
   createUser: (userData) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/create`, {
     method: 'POST',
     body: JSON.stringify(userData)
   }),
 
-  // FIX: Endpoint changed to match the blueprint in user_service/app.py
   getUserPortfolio: (userId) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/${userId}/portfolio`),
 
-  // NOTE: buy_stock and sell_stock endpoints are not defined in your Python code.
-  // I've mapped them to the portfolio update endpoint.
   buyStock: (userId, tradeData) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/${userId}/portfolio/update`, {
     method: 'POST',
     body: JSON.stringify({ ...tradeData, trade_type: 'buy' })
@@ -97,7 +101,6 @@ export const userAPI = {
 
 // Bank Service API
 export const bankAPI = {
-  // FIX: Corrected endpoint to match bank_service/app.py
   getBalance: (userId) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/balance/${userId}`),
   creditAccount: (transactionData) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/credit`, {
     method: 'POST',
@@ -111,7 +114,6 @@ export const bankAPI = {
 
 // Stock Service API
 export const stockAPI = {
-  // Endpoints are correct
   getAllStocks: () => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks`),
   getStock: (symbol) => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks/${symbol}`),
   getMarketSummary: () => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks/market/summary`)
@@ -119,7 +121,6 @@ export const stockAPI = {
 
 // Trade Service API
 export const tradeAPI = {
-  // Endpoints are correct
   logTrade: (tradeData) => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/log`, {
     method: 'POST',
     body: JSON.stringify(tradeData)

@@ -30,10 +30,10 @@ class MongoConnection:
                 cls._instance.client = MongoClient(MONGO_URI)
                 # The ismaster command is cheap and does not require auth.
                 cls._instance.client.admin.command('ismaster')
-                print("✅ MongoDB connection successful.")
+                print("MongoDB connection successful.")
                 cls._instance.db = cls._instance.client[MONGO_DB_NAME]
             except ConnectionFailure as e:
-                print(f"❌ Could not connect to MongoDB: {e}")
+                print(f"Could not connect to MongoDB: {e}")
                 cls._instance.client = None
                 cls._instance.db = None
         return cls._instance
@@ -43,7 +43,6 @@ mongo_conn = MongoConnection()
 db = mongo_conn.db
 
 # Define collections for easy access throughout the application
-# This replaces the SQLAlchemy model classes
 if db is not None:
     users_collection = db.users
     portfolio_collection = db.portfolio
@@ -62,8 +61,6 @@ else:
 def init_db(app=None):
     """
     Initializes the database with sample data.
-    The 'app' parameter is kept for compatibility with the existing app structure,
-    but is not used for the MongoDB connection itself.
     """
     if db is not None:
         print("Initializing sample data...")
@@ -75,7 +72,6 @@ def init_db(app=None):
 def init_sample_data():
     """
     Initializes the stocks collection with sample data if it's empty.
-    This function is idempotent and safe to run multiple times.
     """
     if stocks_collection is None:
         print("Stock collection not available.")
@@ -91,17 +87,11 @@ def init_sample_data():
 
     try:
         for stock in sample_stocks:
-            # Using update_one with upsert=True is an idempotent way to insert if not exists
             stocks_collection.update_one(
                 {'symbol': stock['symbol']},
                 {'$setOnInsert': stock},
                 upsert=True
             )
-        print("✅ Sample stock data initialized successfully.")
+        print("Sample stock data initialized successfully.")
     except Exception as e:
-        print(f"❌ Error initializing sample data: {e}")
-
-# Note: The original SQLAlchemy models (User, Portfolio, etc.) and their `to_dict` methods
-# are no longer needed. PyMongo works with Python dictionaries directly.
-# The logic for creating, reading, updating, and deleting documents will now be handled
-# in your service files (e.g., user_service/app.py) using the collection objects defined above.
+        print(f"Error initializing sample data: {e}")

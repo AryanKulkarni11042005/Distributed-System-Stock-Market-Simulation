@@ -7,14 +7,12 @@ import csv
 import os
 import sys
 from datetime import datetime
-from bson import json_util
+from bson import json_util, ObjectId
 
-# Add path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utils.config import load_config
 from utils.logger import setup_logger, log_with_sync_time
-# Import the MongoDB collections from the updated connection script
 from database.connection import init_db, trades_collection
 from pymongo import DESCENDING
 
@@ -30,28 +28,18 @@ CORS(app, resources={
 app.config.from_object(load_config())
 
 logger = setup_logger(__name__)
-
-# Initialize database (this will run init_sample_data if needed)
 init_db()
-
-# Create logs directory if it doesn't exist
 os.makedirs('logs', exist_ok=True)
 
 def mongo_to_dict(obj):
-    """
-    Helper function to convert MongoDB documents (including ObjectId) to a JSON-serializable dictionary.
-    """
     return json.loads(json_util.dumps(obj))
 
 @Pyro4.expose
 class TradeLoggerRPC:
-    """Pyro4 RPC interface for Trade Logger Service, now using MongoDB."""
-
     def log_trade(self, user_id, stock_symbol, trade_type, quantity, price, total_amount, sync_timestamp=None):
-        """Log a trade via RPC to MongoDB."""
         try:
             trade_document = {
-                'user_id': user_id,
+                'user_id': ObjectId(user_id),
                 'stock_symbol': stock_symbol,
                 'trade_type': trade_type,
                 'quantity': quantity,
@@ -62,10 +50,8 @@ class TradeLoggerRPC:
             }
             result = trades_collection.insert_one(trade_document)
             
-            # Add the generated _id to the document for logging and return
             trade_document['_id'] = result.inserted_id
 
-            # Also log to CSV and JSON for Spark analysis
             self._log_to_csv(trade_document)
             self._log_to_json(trade_document)
 
@@ -76,16 +62,14 @@ class TradeLoggerRPC:
             raise
 
     def get_trades_by_user(self, user_id):
-        """Get all trades for a user via RPC from MongoDB."""
         try:
-            trades = list(trades_collection.find({'user_id': user_id}).sort('timestamp', DESCENDING))
+            trades = list(trades_collection.find({'user_id': ObjectId(user_id)}).sort('timestamp', DESCENDING))
             return mongo_to_dict(trades)
         except Exception as e:
             logger.error(f"RPC Error getting trades for user {user_id}: {e}")
             raise
 
     def get_trades_by_stock(self, stock_symbol):
-        """Get all trades for a stock via RPC from MongoDB."""
         try:
             trades = list(trades_collection.find({'stock_symbol': stock_symbol}).sort('timestamp', DESCENDING))
             return mongo_to_dict(trades)
@@ -94,7 +78,6 @@ class TradeLoggerRPC:
             raise
 
     def get_all_trades(self):
-        """Get all trades via RPC from MongoDB."""
         try:
             trades = list(trades_collection.find({}).sort('timestamp', DESCENDING))
             return mongo_to_dict(trades)
@@ -103,13 +86,11 @@ class TradeLoggerRPC:
             raise
 
     def _log_to_csv(self, trade):
-        """Log trade to CSV file for Spark analysis."""
         try:
             csv_file = 'logs/trades.csv'
             file_exists = os.path.isfile(csv_file)
 
             with open(csv_file, 'a', newline='') as file:
-                # Note: MongoDB's '_id' is used as the primary identifier 'id'
                 fieldnames = ['id', 'user_id', 'stock_symbol', 'trade_type', 'quantity', 'price', 'total_amount', 'timestamp', 'sync_timestamp']
                 writer = csv.DictWriter(file, fieldnames=fieldnames)
 
@@ -118,7 +99,7 @@ class TradeLoggerRPC:
 
                 writer.writerow({
                     'id': str(trade['_id']),
-                    'user_id': trade['user_id'],
+                    'user_id': str(trade['user_id']),
                     'stock_symbol': trade['stock_symbol'],
                     'trade_type': trade['trade_type'],
                     'quantity': trade['quantity'],
@@ -131,7 +112,6 @@ class TradeLoggerRPC:
             logger.error(f"Error logging to CSV: {e}")
 
     def _log_to_json(self, trade):
-        """Log trade to JSON file for Spark analysis."""
         try:
             json_file = 'logs/trades.json'
             
@@ -154,10 +134,8 @@ class TradeLoggerRPC:
         except Exception as e:
             logger.error(f"Error logging to JSON: {e}")
 
-# REST API Routes
 @app.route('/trade/log', methods=['POST'])
 def log_trade():
-    """Log a trade"""
     try:
         data = request.json
         user_id = data.get('user_id')
@@ -182,9 +160,8 @@ def log_trade():
         logger.error(f"Error logging trade: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/trade/user/<int:user_id>', methods=['GET'])
+@app.route('/trade/user/<string:user_id>', methods=['GET'])
 def get_user_trades(user_id):
-    """Get trades for a user"""
     try:
         trade_logger = TradeLoggerRPC()
         trades = trade_logger.get_trades_by_user(user_id)
@@ -195,7 +172,6 @@ def get_user_trades(user_id):
 
 @app.route('/trade/stock/<symbol>', methods=['GET'])
 def get_stock_trades(symbol):
-    """Get trades for a stock"""
     try:
         trade_logger = TradeLoggerRPC()
         trades = trade_logger.get_trades_by_stock(symbol.upper())
@@ -206,7 +182,6 @@ def get_stock_trades(symbol):
 
 @app.route('/trade/all', methods=['GET'])
 def get_all_trades():
-    """Get all trades"""
     try:
         trade_logger = TradeLoggerRPC()
         trades = trade_logger.get_all_trades()
@@ -220,7 +195,6 @@ def health_check():
     return jsonify({'status': 'healthy', 'service': 'trade_logger_service'})
 
 def start_pyro_server():
-    """Start Pyro4 RPC server"""
     try:
         daemon = Pyro4.Daemon(host='localhost', port=9094)
         trade_logger_rpc = TradeLoggerRPC()
@@ -231,11 +205,9 @@ def start_pyro_server():
         logger.error(f"Error starting Pyro4 server: {e}")
 
 if __name__ == '__main__':
-    # Start Pyro4 RPC server in background
     pyro_thread = threading.Thread(target=start_pyro_server, daemon=True)
     pyro_thread.start()
 
-    # Register with time server
     try:
         config = load_config()
         time_server = Pyro4.Proxy(config.TIME_SERVER_URI)

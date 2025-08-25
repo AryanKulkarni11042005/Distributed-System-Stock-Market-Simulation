@@ -7,13 +7,12 @@ import os
 from datetime import datetime
 from bson import json_util, ObjectId
 import json
+from werkzeug.security import generate_password_hash, check_password_hash
 
-# Add path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utils.config import load_config
 from utils.logger import setup_logger, log_with_sync_time
-# Import the MongoDB collections
 from database.connection import init_db, users_collection, portfolio_collection
 from utils.exceptions import UserNotFoundException, InsufficientStocksException
 
@@ -29,106 +28,126 @@ CORS(app, resources={
 app.config.from_object(load_config())
 
 logger = setup_logger(__name__)
-
-# Initialize database
 init_db()
 
 def mongo_to_dict(obj):
-    """Helper to convert MongoDB documents to JSON-serializable dicts."""
     return json.loads(json_util.dumps(obj))
 
-# User Service Logic
 class UserService:
     @staticmethod
-    def create_user(username, email):
-        """Create a new user in MongoDB."""
+    def create_user(username, email, password):
+        hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
         user_document = {
             "username": username,
             "email": email,
+            "password": hashed_password,
+            "role": "user",
             "created_at": datetime.utcnow()
         }
         result = users_collection.insert_one(user_document)
+        
+        # Create a corresponding portfolio for the new user
+        portfolio_collection.insert_one({
+            "user_id": result.inserted_id,
+            "holdings": []
+        })
+
         log_with_sync_time(logger, 20, f"Created user: {username}", 'user_service')
         user_document['_id'] = result.inserted_id
         return user_document
 
     @staticmethod
     def get_user(user_id):
-        """Get user by ID from MongoDB."""
-        # ObjectId is required for querying by _id
         return users_collection.find_one({'_id': ObjectId(user_id)})
 
     @staticmethod
     def get_user_by_username(username):
-        """Get user by username from MongoDB."""
         return users_collection.find_one({'username': username})
 
     @staticmethod
     def get_user_portfolio(user_id):
-        """Get user's portfolio from MongoDB."""
-        return list(portfolio_collection.find({'user_id': user_id}))
+        return portfolio_collection.find_one({'user_id': ObjectId(user_id)})
 
     @staticmethod
     def update_portfolio(user_id, stock_symbol, quantity, price, trade_type):
-        """Update user's portfolio in MongoDB."""
-        query = {'user_id': user_id, 'stock_symbol': stock_symbol}
-        portfolio_item = portfolio_collection.find_one(query)
+        user_oid = ObjectId(user_id)
+        portfolio = portfolio_collection.find_one({'user_id': user_oid})
+        
+        if not portfolio:
+            raise UserNotFoundException(f"Portfolio not found for user {user_id}")
+
+        holding_index = -1
+        for i, holding in enumerate(portfolio.get('holdings', [])):
+            if holding['stock_symbol'] == stock_symbol:
+                holding_index = i
+                break
 
         if trade_type == 'buy':
-            if portfolio_item:
+            if holding_index != -1:
                 # Update existing holding
-                total_value = (portfolio_item['quantity'] * portfolio_item['avg_price']) + (quantity * price)
-                new_quantity = portfolio_item['quantity'] + quantity
-                new_avg_price = total_value / new_quantity
+                current_quantity = portfolio['holdings'][holding_index]['quantity']
+                current_avg_price = portfolio['holdings'][holding_index]['avg_price']
                 
-                update = {
-                    '$set': {
-                        'quantity': new_quantity,
-                        'avg_price': new_avg_price
-                    }
-                }
-                portfolio_collection.update_one(query, update)
+                total_value = (current_quantity * current_avg_price) + (quantity * price)
+                new_quantity = current_quantity + quantity
+                new_avg_price = total_value / new_quantity
+
+                portfolio_collection.update_one(
+                    {'user_id': user_oid, 'holdings.stock_symbol': stock_symbol},
+                    {'$set': {
+                        f'holdings.{holding_index}.quantity': new_quantity,
+                        f'holdings.{holding_index}.avg_price': new_avg_price
+                    }}
+                )
             else:
-                # Create new holding
-                new_item = {
-                    'user_id': user_id,
+                # Add new holding
+                new_holding = {
                     'stock_symbol': stock_symbol,
                     'quantity': quantity,
                     'avg_price': price
                 }
-                portfolio_collection.insert_one(new_item)
+                portfolio_collection.update_one(
+                    {'user_id': user_oid},
+                    {'$push': {'holdings': new_holding}}
+                )
         
         elif trade_type == 'sell':
-            if portfolio_item and portfolio_item['quantity'] >= quantity:
-                new_quantity = portfolio_item['quantity'] - quantity
-                if new_quantity == 0:
-                    # If quantity is zero, remove the item from portfolio
-                    portfolio_collection.delete_one(query)
+            if holding_index != -1:
+                current_quantity = portfolio['holdings'][holding_index]['quantity']
+                if current_quantity >= quantity:
+                    new_quantity = current_quantity - quantity
+                    if new_quantity == 0:
+                        # Remove the holding if quantity is zero
+                        portfolio_collection.update_one(
+                            {'user_id': user_oid},
+                            {'$pull': {'holdings': {'stock_symbol': stock_symbol}}}
+                        )
+                    else:
+                        # Otherwise, just decrement the quantity
+                        portfolio_collection.update_one(
+                            {'user_id': user_oid, 'holdings.stock_symbol': stock_symbol},
+                            {'$set': {f'holdings.{holding_index}.quantity': new_quantity}}
+                        )
                 else:
-                    # Otherwise, just decrement the quantity
-                    portfolio_collection.update_one(query, {'$inc': {'quantity': -quantity}})
+                    raise InsufficientStocksException(f"Insufficient stocks to sell. Available: {current_quantity}, Required: {quantity}")
             else:
-                available_qty = portfolio_item['quantity'] if portfolio_item else 0
-                raise InsufficientStocksException(f"Insufficient stocks to sell. Available: {available_qty}, Required: {quantity}")
+                raise InsufficientStocksException("Cannot sell stock that is not in the portfolio.")
         
         log_with_sync_time(logger, 20, f"Updated portfolio for user {user_id}: {trade_type} {quantity} {stock_symbol}", 'user_service')
-        return portfolio_collection.find_one(query)
+        return portfolio_collection.find_one({'user_id': user_oid})
+
 
 @Pyro4.expose
 class UserServiceRPC:
-    """Pyro4 RPC interface for User Service, now using MongoDB."""
-    
-    def create_user(self, username, email):
-        """Create a new user via RPC."""
+    def create_user(self, username, email, password):
         try:
-            user = UserService.create_user(username, email)
+            user = UserService.create_user(username, email, password)
             return mongo_to_dict(user)
         except Exception as e:
             logger.error(f"RPC Error creating user: {e}")
             raise
     
     def get_user(self, user_id):
-        """Get user by ID via RPC."""
         try:
             user = UserService.get_user(user_id)
             return mongo_to_dict(user) if user else None
@@ -137,7 +156,6 @@ class UserServiceRPC:
             raise
     
     def get_user_portfolio(self, user_id):
-        """Get user's portfolio via RPC."""
         try:
             portfolio = UserService.get_user_portfolio(user_id)
             return mongo_to_dict(portfolio)
@@ -146,7 +164,6 @@ class UserServiceRPC:
             raise
     
     def update_portfolio(self, user_id, stock_symbol, quantity, price, trade_type):
-        """Update user's portfolio via RPC."""
         try:
             portfolio_item = UserService.update_portfolio(user_id, stock_symbol, quantity, price, trade_type)
             return mongo_to_dict(portfolio_item) if portfolio_item else None
@@ -154,26 +171,27 @@ class UserServiceRPC:
             logger.error(f"RPC Error updating portfolio: {e}")
             raise
 
-# Create Blueprint for REST API
 user_bp = Blueprint('user', __name__)
 
 @user_bp.route('/create', methods=['POST'])
 def create_user():
-    """Create a new user"""
     try:
         data = request.json
         username = data.get('username')
         email = data.get('email')
+        password = data.get('password')
         
-        if not username or not email:
-            return jsonify({'error': 'Username and email are required'}), 400
+        if not all([username, email, password]):
+            return jsonify({'error': 'Username, email, and password are required'}), 400
         
         if UserService.get_user_by_username(username):
             return jsonify({'error': 'Username already exists'}), 400
         
-        user = UserService.create_user(username, email)
+        user = UserService.create_user(username, email, password)
         sync_time = log_with_sync_time(logger, 20, f"REST: Created user {username}", 'user_service')
         
+        user.pop('password', None)
+
         return jsonify({
             'message': 'User created successfully',
             'user': mongo_to_dict(user),
@@ -184,42 +202,61 @@ def create_user():
         logger.error(f"Error creating user: {e}")
         return jsonify({'error': str(e)}), 500
 
-@user_bp.route('/<user_id>', methods=['GET'])
+@user_bp.route('/login', methods=['POST'])
+def login():
+    try:
+        data = request.json
+        username = data.get('username')
+        password = data.get('password')
+
+        if not username or not password:
+            return jsonify({'error': 'Username and password are required'}), 400
+
+        user = UserService.get_user_by_username(username)
+
+        if not user or not check_password_hash(user['password'], password):
+            return jsonify({'error': 'Invalid username or password'}), 401
+        
+        user.pop('password', None)
+        return jsonify({
+            'message': 'Login successful',
+            'user': mongo_to_dict(user)
+        })
+
+    except Exception as e:
+        logger.error(f"Error during login for user {username}: {e}")
+        return jsonify({'error': 'An internal error occurred'}), 500
+
+@user_bp.route('/<string:user_id>', methods=['GET'])
 def get_user(user_id):
-    """Get user by ID"""
     try:
         user = UserService.get_user(user_id)
         if not user:
             return jsonify({'error': 'User not found'}), 404
         
+        user.pop('password', None)
         return jsonify({'user': mongo_to_dict(user)})
         
     except Exception as e:
         logger.error(f"Error getting user {user_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
-@user_bp.route('/<int:user_id>/portfolio', methods=['GET'])
+@user_bp.route('/<string:user_id>/portfolio', methods=['GET'])
 def get_portfolio(user_id):
-    """Get user's portfolio"""
     try:
-        # Check if user exists (optional, but good practice)
-        # For this, we need a way to query by integer ID if that's what's passed
-        # Assuming user_id in portfolio is the same int
-        
         portfolio = UserService.get_user_portfolio(user_id)
         
         return jsonify({
             'user_id': user_id,
-            'portfolio': mongo_to_dict(portfolio)
+            'portfolio': mongo_to_dict(portfolio) if portfolio else {'holdings': []}
         })
         
     except Exception as e:
         logger.error(f"Error getting portfolio for user {user_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
-@user_bp.route('/<int:user_id>/portfolio/update', methods=['POST'])
+@user_bp.route('/<string:user_id>/portfolio/update', methods=['POST'])
 def update_portfolio(user_id):
-    """Update user's portfolio"""
     try:
         data = request.json
         stock_symbol = data.get('stock_symbol')
@@ -230,7 +267,7 @@ def update_portfolio(user_id):
         if not all([stock_symbol, isinstance(quantity, int), isinstance(price, (int, float)), trade_type]):
             return jsonify({'error': 'All fields with correct types are required'}), 400
         
-        portfolio_item = UserService.update_portfolio(
+        updated_portfolio = UserService.update_portfolio(
             user_id, stock_symbol, quantity, price, trade_type
         )
         
@@ -238,17 +275,16 @@ def update_portfolio(user_id):
         
         return jsonify({
             'message': 'Portfolio updated successfully',
-            'portfolio_item': mongo_to_dict(portfolio_item) if portfolio_item else None,
+            'portfolio': mongo_to_dict(updated_portfolio) if updated_portfolio else None,
             'sync_time': sync_time
         })
         
-    except InsufficientStocksException as e:
+    except (InsufficientStocksException, UserNotFoundException) as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error(f"Error updating portfolio for user {user_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
-# Register blueprint
 app.register_blueprint(user_bp, url_prefix='/user')
 
 @app.route('/health', methods=['GET'])
@@ -256,7 +292,6 @@ def health_check():
     return jsonify({'status': 'healthy', 'service': 'user_service'})
 
 def start_pyro_server():
-    """Start Pyro4 RPC server in background thread"""
     try:
         daemon = Pyro4.Daemon(host='localhost', port=9091)
         user_service_rpc = UserServiceRPC()
@@ -267,11 +302,9 @@ def start_pyro_server():
         logger.error(f"Error starting Pyro4 server: {e}")
 
 if __name__ == '__main__':
-    # Start Pyro4 RPC server in background
     pyro_thread = threading.Thread(target=start_pyro_server, daemon=True)
     pyro_thread.start()
     
-    # Register with time server
     try:
         config = load_config()
         time_server = Pyro4.Proxy(config.TIME_SERVER_URI)

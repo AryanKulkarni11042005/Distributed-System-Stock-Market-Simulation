@@ -27,7 +27,7 @@ const Login = () => {
   const [formData, setFormData] = useState({
     username: '',
     email: '',
-    password: 'demo123' // Pre-filled for demo purposes
+    password: ''
   });
   
   // Validation states
@@ -79,7 +79,6 @@ const Login = () => {
       [name]: value
     }));
     
-    // Clear error when user starts typing
     if (errors[name]) {
       setErrors(prev => ({
         ...prev,
@@ -88,7 +87,6 @@ const Login = () => {
     }
   };
 
-  // Handle input blur for validation
   const handleInputBlur = (field) => {
     setTouched(prev => ({
       ...prev,
@@ -109,10 +107,8 @@ const Login = () => {
     
     try {
       if (isLogin) {
-        // Login flow - simulate login (in real app, authenticate with backend)
-        await simulateLogin();
+        await handleLogin();
       } else {
-        // Registration flow
         await handleRegistration();
       }
     } catch (error) {
@@ -123,34 +119,32 @@ const Login = () => {
     }
   };
 
-  // Simulate login process
-  const simulateLogin = async () => {
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // Mock login validation
-    if (formData.username && formData.password) {
-      // Generate mock user data
-      const userData = {
-        _id: { "$oid": Date.now().toString() }, // Simulate MongoDB ID structure
+  // Handle user login
+  const handleLogin = async () => {
+    try {
+      const response = await userAPI.login({
         username: formData.username,
-        email: formData.email || `${formData.username}@example.com`,
-        balance: 10000,
-        createdAt: new Date().toISOString()
-      };
-      
-      // Store in localStorage
-      localStorage.setItem('userId', userData._id.$oid);
-      localStorage.setItem('username', userData.username);
-      localStorage.setItem('authToken', 'mock-jwt-token');
-      
-      toast.success(`Welcome back, ${userData.username}!`);
-      
-      // Redirect to intended page
-      const from = location.state?.from?.pathname || '/';
-      navigate(from, { replace: true });
-    } else {
-      throw new Error('Invalid credentials');
+        password: formData.password
+      });
+
+      if (response.data && response.data.user) {
+        const userData = response.data.user;
+        const userId = userData._id?.$oid || userData._id;
+
+        localStorage.setItem('userId', userId);
+        localStorage.setItem('username', userData.username);
+        // In a real app, you would store a JWT token from the response
+        localStorage.setItem('authToken', 'real-auth-token-from-backend');
+        
+        toast.success(`Welcome back, ${userData.username}!`);
+        
+        const from = location.state?.from?.pathname || '/';
+        navigate(from, { replace: true });
+      } else {
+        throw new Error('Invalid response from server during login.');
+      }
+    } catch (error) {
+      throw new Error(error.message || 'Login failed. Please check your credentials.');
     }
   };
 
@@ -159,56 +153,30 @@ const Login = () => {
     try {
       const response = await userAPI.createUser({
         username: formData.username,
-        email: formData.email
+        email: formData.email,
+        password: formData.password
       });
       
       if (response.data && response.data.user) {
         const userData = response.data.user;
-        
-        // **FIX:** The user ID from MongoDB is in `userData._id.$oid`
-        // The original code was looking for `userData.id`, which is undefined.
         const userId = userData._id?.$oid || userData._id;
 
         if (!userId) {
             throw new Error("User ID not found in registration response.");
         }
 
-        // Store user data
         localStorage.setItem('userId', userId.toString());
         localStorage.setItem('username', userData.username);
-        localStorage.setItem('authToken', 'mock-jwt-token'); // Use a real token in production
+        localStorage.setItem('authToken', 'real-auth-token-from-backend');
         
         toast.success(`Account created successfully! Welcome, ${userData.username}!`);
         
-        // Redirect to dashboard
         navigate('/', { replace: true });
       } else {
-        // If the structure is not as expected, throw an error.
         throw new Error('Invalid response from server during registration.');
       }
     } catch (error) {
-      // Log the full error for debugging but show a generic message to the user.
-      console.error("Registration failed:", error);
-      throw new Error(error.response?.data?.error || 'Registration failed. Please try again.');
-    }
-  };
-
-  // Demo user login
-  const handleDemoLogin = async () => {
-    setFormData({
-      username: 'demo_trader',
-      email: 'demo@stocksim.com',
-      password: 'demo123'
-    });
-    
-    setIsLoading(true);
-    
-    try {
-      await simulateLogin();
-    } catch (error) {
-      toast.error('Demo login failed');
-    } finally {
-      setIsLoading(false);
+      throw new Error(error.message || 'Registration failed. Please try again.');
     }
   };
 
@@ -356,19 +324,6 @@ const Login = () => {
                 </>
               )}
             </button>
-
-            {/* Demo Login Button */}
-            {isLogin && (
-              <button
-                type="button"
-                onClick={handleDemoLogin}
-                disabled={isLoading}
-                className="btn btn-secondary w-full"
-              >
-                Try Demo Account
-              </button>
-            )}
-
           </form>
 
           {/* Toggle Auth Mode */}

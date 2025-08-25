@@ -9,5 +9,20 @@
     "total_amount": 933.7,
     "timestamp": "2025-08-21T17:02:08.590538",
     "sync_timestamp": null
+  },
+  {
+    "user_id": "68aca85b14743bf70ec73c4d",
+    "stock_symbol": "AAPL",
+    "trade_type": "buy",
+    "quantity": 5,
+    "price": 79.15,
+    "total_amount": 395.75,
+    "timestamp": {
+      "$date": "2025-08-25T18:27:25.790Z"
+    },
+    "sync_timestamp": null,
+    "_id": {
+      "$oid": "68acab0ddf3f6bc515df4e00"
+    }
   }
 ]
