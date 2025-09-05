@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import datetime
 from pymongo import MongoClient
+from bson import ObjectId
 import pandas as pd
 import urllib.parse
 
@@ -46,10 +47,23 @@ class ProfitAnalyzer:
             if not trades_list:
                 return None
 
-            pandas_df = pd.DataFrame(trades_list)
-            if '_id' in pandas_df.columns:
-                pandas_df['_id'] = pandas_df['_id'].astype(str)
+            # Pre-process the list to handle MongoDB's BSON types
+            processed_list = []
+            for trade in trades_list:
+                processed_trade = {}
+                for key, value in trade.items():
+                    if isinstance(value, ObjectId):
+                        processed_trade[key] = str(value)
+                    elif isinstance(value, datetime):
+                        processed_trade[key] = value.isoformat()
+                    else:
+                        processed_trade[key] = value
+                processed_list.append(processed_trade)
 
+            if not processed_list:
+                return None
+                
+            pandas_df = pd.DataFrame(processed_list)
             return self.spark.createDataFrame(pandas_df)
         except Exception as e:
             print(f"Error connecting to MongoDB or fetching data: {e}")
@@ -63,7 +77,7 @@ class ProfitAnalyzer:
                 print("No trade data found in MongoDB.")
                 return None
 
-            trades_df = trades_df.withColumn("user_id", col("user_id").cast("integer")) \
+            trades_df = trades_df.withColumn("user_id", col("user_id").cast("string")) \
                                .withColumn("quantity", col("quantity").cast("integer")) \
                                .withColumn("price", col("price").cast("double")) \
                                .withColumn("total_amount", col("total_amount").cast("double")) \
@@ -125,3 +139,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

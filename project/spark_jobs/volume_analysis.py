@@ -6,6 +6,7 @@ import os
 import sys
 from datetime import datetime
 from pymongo import MongoClient
+from bson import ObjectId
 import pandas as pd
 import urllib.parse
 
@@ -46,10 +47,23 @@ class VolumeAnalyzer:
             if not trades_list:
                 return None
 
-            pandas_df = pd.DataFrame(trades_list)
-            if '_id' in pandas_df.columns:
-                pandas_df['_id'] = pandas_df['_id'].astype(str)
+            # Pre-process the list to handle MongoDB's BSON types
+            processed_list = []
+            for trade in trades_list:
+                processed_trade = {}
+                for key, value in trade.items():
+                    if isinstance(value, ObjectId):
+                        processed_trade[key] = str(value)
+                    elif isinstance(value, datetime):
+                        processed_trade[key] = value.isoformat()
+                    else:
+                        processed_trade[key] = value
+                processed_list.append(processed_trade)
 
+            if not processed_list:
+                return None
+
+            pandas_df = pd.DataFrame(processed_list)
             return self.spark.createDataFrame(pandas_df)
         except Exception as e:
             print(f"Error connecting to MongoDB or fetching data: {e}")
@@ -129,6 +143,7 @@ class VolumeAnalyzer:
             
             daily_data = [row.asDict() for row in result]
             
+            os.makedirs("spark_results", exist_ok=True)
             with open("spark_results/daily_volume_analysis.json", "w") as f:
                 json.dump({
                     "analysis_timestamp": datetime.now().isoformat(),
@@ -169,3 +184,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -7,62 +7,32 @@ const USER_SERVICE_PORT = import.meta.env.VITE_USER_SERVICE_PORT || '5001';
 const BANK_SERVICE_PORT = import.meta.env.VITE_BANK_SERVICE_PORT || '5002';
 const STOCK_SERVICE_PORT = import.meta.env.VITE_STOCK_SERVICE_PORT || '5003';
 const TRADE_SERVICE_PORT = import.meta.env.VITE_TRADE_SERVICE_PORT || '5004';
-
-// Feature flag for development mode
-const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true';
-
-console.log('API Configuration:', {
-  USE_MOCK_DATA,
-  USER_SERVICE: `${API_BASE_URL}:${USER_SERVICE_PORT}`,
-  BANK_SERVICE: `${API_BASE_URL}:${BANK_SERVICE_PORT}`,
-  STOCK_SERVICE: `${API_BASE_URL}:${STOCK_SERVICE_PORT}`,
-  TRADE_SERVICE: `${API_BASE_URL}:${TRADE_SERVICE_PORT}`
-});
+const ANALYTICS_SERVICE_PORT = import.meta.env.VITE_ANALYTICS_SERVICE_PORT || '5005';
 
 // API endpoints
 const API_ENDPOINTS = {
   USER_SERVICE: `${API_BASE_URL}:${USER_SERVICE_PORT}`,
   BANK_SERVICE: `${API_BASE_URL}:${BANK_SERVICE_PORT}`,
   STOCK_SERVICE: `${API_BASE_URL}:${STOCK_SERVICE_PORT}`,
-  TRADE_SERVICE: `${API_BASE_URL}:${TRADE_SERVICE_PORT}`
+  TRADE_SERVICE: `${API_BASE_URL}:${TRADE_SERVICE_PORT}`,
+  ANALYTICS_SERVICE: `${API_BASE_URL}:${ANALYTICS_SERVICE_PORT}`
 };
 
-// Generic API call function with AbortController support
+// Generic API call function
 const apiCall = async (url, options = {}) => {
-  if (USE_MOCK_DATA) {
-    console.log(`[MOCK] API call to: ${url}`);
-    await new Promise(resolve => setTimeout(resolve, 300));
-    throw new Error('Using mock data - backend not available');
-  }
-
-  console.log(`[REAL] API call to: ${url}`);
-  
   try {
     const response = await fetch(url, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-      },
-      signal: options.signal, // Pass the signal to the fetch request
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      signal: options.signal,
     });
-
-    if (options.signal?.aborted) {
-        throw new DOMException('Request aborted', 'AbortError');
-    }
-
+    if (options.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
     const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error || `HTTP error! status: ${response.status}`);
-    }
-    
-    console.log(`[REAL] API response for ${url}:`, data);
+    if (!response.ok) throw new Error(data.error || `HTTP error! status: ${response.status}`);
     return { data };
-    
   } catch (error) {
     if (error.name !== 'AbortError') {
-      console.error(`[REAL] API call failed for ${url}:`, error);
+      console.error(`API call failed for ${url}:`, error);
       throw error;
     }
   }
@@ -80,23 +50,30 @@ export const userAPI = {
 // Bank Service API
 export const bankAPI = {
   getBalance: (userId, options) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/balance/${userId}`, options),
-  creditAccount: (transactionData, options) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/credit`, { method: 'POST', body: JSON.stringify(transactionData), ...options }),
-  debitAccount: (transactionData, options) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/debit`, { method: 'POST', body: JSON.stringify(transactionData), ...options })
+  creditAccount: (data, options) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/credit`, { method: 'POST', body: JSON.stringify(data), ...options }),
+  debitAccount: (data, options) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/debit`, { method: 'POST', body: JSON.stringify(data), ...options })
 };
 
 // Stock Service API
 export const stockAPI = {
   getAllStocks: (options) => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks`, options),
-  getStock: (symbol, options) => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks/${symbol}`, options),
   getMarketSummary: (options) => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks/market/summary`, options)
 };
 
 // Trade Service API
 export const tradeAPI = {
-  logTrade: (tradeData, options) => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/log`, { method: 'POST', body: JSON.stringify(tradeData), ...options }),
   getUserTrades: (userId, options) => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/user/${userId}`, options),
-  getAllTrades: (options) => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/all`, options)
 };
+
+// Analytics Service API
+export const analyticsAPI = {
+    runJobs: (options) => apiCall(`${API_ENDPOINTS.ANALYTICS_SERVICE}/analytics/run`, { method: 'POST', ...options }),
+    getPortfolioAnalysis: (options) => apiCall(`${API_ENDPOINTS.ANALYTICS_SERVICE}/analytics/portfolio`, options),
+    getVolumeAnalysis: (options) => apiCall(`${API_ENDPOINTS.ANALYTICS_SERVICE}/analytics/volume`, options),
+    getProfitAnalysis: (options) => apiCall(`${API_ENDPOINTS.ANALYTICS_SERVICE}/analytics/profit`, options),
+    getTopPerformers: (options) => apiCall(`${API_ENDPOINTS.ANALYTICS_SERVICE}/analytics/top-performers`, options),
+};
+
 
 // Health Check API
 export const healthAPI = {
@@ -105,25 +82,13 @@ export const healthAPI = {
       { name: 'User Service', url: `${API_ENDPOINTS.USER_SERVICE}/health` },
       { name: 'Bank Service', url: `${API_ENDPOINTS.BANK_SERVICE}/health` },
       { name: 'Stock Exchange', url: `${API_ENDPOINTS.STOCK_SERVICE}/health` },
-      { name: 'Trade Logger', url: `${API_ENDPOINTS.TRADE_SERVICE}/health` }
+      { name: 'Trade Logger', url: `${API_ENDPOINTS.TRADE_SERVICE}/health` },
+      { name: 'Analytics Service', url: `${API_ENDPOINTS.ANALYTICS_SERVICE}/health` }
     ];
-
-    const healthChecks = await Promise.allSettled(
-      services.map(service => 
-        fetch(service.url, { method: 'GET', timeout: 5000, signal: options?.signal })
-          .then(res => ({ name: service.name, status: res.ok ? 'healthy' : 'unhealthy' }))
-          .catch(() => ({ name: service.name, status: 'unhealthy' }))
-      )
+    const checks = await Promise.allSettled(
+      services.map(s => fetch(s.url, { method: 'GET', signal: options?.signal }).then(res => ({ name: s.name, status: res.ok ? 'healthy' : 'unhealthy' })).catch(() => ({ name: s.name, status: 'unhealthy' })))
     );
-
-    return healthChecks.map(result => result.status === 'fulfilled' ? result.value : { name: result.reason.name, status: 'unhealthy' });
+    return checks.map(res => res.status === 'fulfilled' ? res.value : { name: 'Unknown', status: 'unhealthy' });
   }
 };
 
-export default {
-  userAPI,
-  bankAPI,
-  stockAPI,
-  tradeAPI,
-  healthAPI
-};
