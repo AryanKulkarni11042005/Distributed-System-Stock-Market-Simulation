@@ -35,16 +35,21 @@ const Trading = () => {
   const [tradeQuantity, setTradeQuantity] = useState(1);
   const [isProcessingTrade, setIsProcessingTrade] = useState(false);
 
-  // Load initial data
+  // Load initial data and set up auto-refresh
   useEffect(() => {
-    loadTradingData();
+    const abortController = new AbortController();
+    const { signal } = abortController;
     
-    // Auto-refresh every 15 seconds
+    loadTradingData(signal);
+    
     const interval = setInterval(() => {
-      refreshStockPrices();
+      refreshStockPrices(signal);
     }, 15000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      abortController.abort();
+    };
   }, []);
 
   // Filter and search stocks
@@ -63,13 +68,13 @@ const Trading = () => {
     if (selectedFilter !== 'all') {
       switch (selectedFilter) {
         case 'gainers':
-          filtered = filtered.filter(stock => stock.price_change > 0);
+          filtered = filtered.filter(stock => (stock.price_change || 0) > 0);
           break;
         case 'losers':
-          filtered = filtered.filter(stock => stock.price_change < 0);
+          filtered = filtered.filter(stock => (stock.price_change || 0) < 0);
           break;
         case 'most_active':
-          filtered = filtered.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+          filtered = [...filtered].sort((a, b) => (b.volume || 0) - (a.volume || 0));
           break;
         default:
           break;
@@ -80,58 +85,70 @@ const Trading = () => {
   }, [stocks, searchTerm, selectedFilter]);
 
   // Load all trading data
-  const loadTradingData = async () => {
+  const loadTradingData = async (signal) => {
     setLoading(true);
     try {
       await Promise.all([
-        loadStocks(),
-        loadUserBalance()
+        loadStocks(signal),
+        loadUserBalance(signal)
       ]);
     } catch (error) {
-      console.error('Error loading trading data:', error);
-      toast.error('Failed to load trading data');
+       if (error.name !== 'AbortError') {
+        console.error('Error loading trading data:', error);
+        toast.error('Failed to load trading data');
+      }
     } finally {
-      setLoading(false);
+      if(!signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
   // Load stocks data
-  const loadStocks = async () => {
+  const loadStocks = async (signal) => {
     try {
-      const response = await stockAPI.getAllStocks();
-      setStocks(response.data.stocks || getMockStocks());
+      const response = await stockAPI.getAllStocks({ signal });
+      if(response) setStocks(response.data.stocks || getMockStocks());
     } catch (error) {
-      console.error('Error loading stocks:', error);
-      setStocks(getMockStocks());
+      if (error.name !== 'AbortError') {
+        console.error('Error loading stocks:', error);
+        setStocks(getMockStocks()); // Fallback to mock data
+      }
     }
   };
 
   // Load user balance
-  const loadUserBalance = async () => {
+  const loadUserBalance = async (signal) => {
     try {
       const userId = localStorage.getItem('userId');
       if (userId) {
-        const response = await bankAPI.getBalance(userId);
-        setUserBalance(response.data.balance || 10000);
+        const response = await bankAPI.getBalance(userId, { signal });
+        if(response) setUserBalance(response.data.balance || 10000);
       }
     } catch (error) {
-      console.error('Error loading balance:', error);
-      setUserBalance(10000);
+       if (error.name !== 'AbortError') {
+        console.error('Error loading balance:', error);
+        setUserBalance(10000); // Fallback
+      }
     }
   };
 
   // Refresh stock prices only
-  const refreshStockPrices = async () => {
+  const refreshStockPrices = async (signal) => {
     setRefreshing(true);
     try {
-      await loadStocks();
+      await loadStocks(signal);
     } catch (error) {
-      console.error('Error refreshing prices:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Error refreshing prices:', error);
+      }
     } finally {
-      setRefreshing(false);
+       if (!signal.aborted) {
+        setRefreshing(false);
+      }
     }
   };
-
+  
   // Mock stocks data
   const getMockStocks = () => [
     { symbol: 'AAPL', name: 'Apple Inc.', current_price: 150.25, price_change: 2.15, change_percent: 1.45, volume: 45000 },
@@ -170,41 +187,22 @@ const Trading = () => {
         total_amount: totalAmount
       };
 
-      // Execute the trade through your backend services
       if (tradeType === 'buy') {
-        // Buy stock
         await userAPI.buyStock(userId, tradeData);
-        
-        // Debit account
-        await bankAPI.debitAccount({
-          user_id: userId,
-          amount: totalAmount
-        });
+        await bankAPI.debitAccount({ user_id: userId, amount: totalAmount });
       } else {
-        // Sell stock
         await userAPI.sellStock(userId, tradeData);
-        
-        // Credit account
-        await bankAPI.creditAccount({
-          user_id: userId,
-          amount: totalAmount
-        });
+        await bankAPI.creditAccount({ user_id: userId, amount: totalAmount });
       }
 
-      // Log the trade
-      await tradeAPI.logTrade({
-        user_id: userId,
-        ...tradeData
-      });
+      await tradeAPI.logTrade({ user_id: userId, ...tradeData });
 
       toast.success(
         `Successfully ${tradeType === 'buy' ? 'bought' : 'sold'} ${tradeQuantity} shares of ${selectedStock.symbol}`
       );
 
-      // Refresh user balance
       await loadUserBalance();
       
-      // Close modal
       setShowTradeModal(false);
       setSelectedStock(null);
       setTradeQuantity(1);
@@ -217,27 +215,17 @@ const Trading = () => {
     }
   };
 
-  // Format currency
   const formatCurrency = (amount) => {
-    if (amount === undefined || amount === null || isNaN(amount)) {
-      return '$0.00';
-    }
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2
-    }).format(Number(amount));
+    if (amount === undefined || amount === null || isNaN(amount)) return '$0.00';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(amount));
   };
 
-  // Format percentage
   const formatPercent = (percent) => {
-    if (percent === undefined || percent === null || isNaN(percent)) {
-      return '0.00%';
-    }
-    return `${Number(percent) >= 0 ? '+' : ''}${Number(percent).toFixed(2)}%`;
+    if (percent === undefined || percent === null || isNaN(percent)) return '0.00%';
+    const p = Number(percent);
+    return `${p >= 0 ? '+' : ''}${p.toFixed(2)}%`;
   };
 
-  // Open trade modal
   const openTradeModal = (stock, type) => {
     setSelectedStock(stock);
     setTradeType(type);
@@ -279,7 +267,7 @@ const Trading = () => {
           </div>
           
           <button
-            onClick={refreshStockPrices}
+            onClick={() => refreshStockPrices()}
             disabled={refreshing}
             className="btn btn-outline btn-sm flex items-center space-x-2"
           >
@@ -293,7 +281,6 @@ const Trading = () => {
       <div className="card">
         <div className="flex flex-col sm:flex-row gap-4">
           
-          {/* Search */}
           <div className="flex-1 relative">
             <Search className="w-5 h-5 text-slate-400 absolute left-3 top-3" />
             <input
@@ -305,7 +292,6 @@ const Trading = () => {
             />
           </div>
 
-          {/* Filter */}
           <div className="flex items-center space-x-2">
             <Filter className="w-5 h-5 text-slate-400" />
             <select
@@ -349,72 +335,30 @@ const Trading = () => {
                 <tr key={stock.symbol} className="table-hover">
                   <td>
                     <div>
-                      <div className="font-medium text-slate-900">
-                        {stock.symbol}
-                      </div>
-                      <div className="text-sm text-slate-600">
-                        {stock.name}
-                      </div>
+                      <div className="font-medium text-slate-900">{stock.symbol}</div>
+                      <div className="text-sm text-slate-600">{stock.name}</div>
                     </div>
                   </td>
-                  
                   <td>
-                    <div className="font-medium text-slate-900">
-                      {formatCurrency(stock.current_price)}
-                    </div>
+                    <div className="font-medium text-slate-900">{formatCurrency(stock.current_price)}</div>
                   </td>
-                  
                   <td>
-                    <div className={`flex items-center space-x-1 ${
-                      (stock.price_change || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'
-                    }`}>
-                      {(stock.price_change || 0) >= 0 ? (
-                        <ArrowUpRight className="w-4 h-4" />
-                      ) : (
-                        <ArrowDownRight className="w-4 h-4" />
-                      )}
-                      <span className="font-medium">
-                        {formatPercent(stock.change_percent)}
-                      </span>
+                    <div className={`flex items-center space-x-1 ${(stock.price_change || 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {(stock.price_change || 0) >= 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
+                      <span className="font-medium">{formatPercent(stock.change_percent)}</span>
                     </div>
                     <div className="text-sm text-slate-500">
-                      {stock.price_change !== undefined && stock.price_change !== null
-                        ? `${stock.price_change >= 0 ? '+' : ''}${Number(stock.price_change).toFixed(2)}`
-                        : '0.00'
-                      }
+                      {stock.price_change !== undefined ? `${stock.price_change >= 0 ? '+' : ''}${Number(stock.price_change).toFixed(2)}` : '0.00'}
                     </div>
                   </td>
-                  
                   <td>
-                    <div className="text-slate-700">
-                      {(stock.volume || 0).toLocaleString()}
-                    </div>
+                    <div className="text-slate-700">{(stock.volume || 0).toLocaleString()}</div>
                   </td>
-                  
                   <td>
                     <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => openTradeModal(stock, 'buy')}
-                        className="btn btn-success btn-sm flex items-center space-x-1"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>Buy</span>
-                      </button>
-                      
-                      <button
-                        onClick={() => openTradeModal(stock, 'sell')}
-                        className="btn btn-danger btn-sm flex items-center space-x-1"
-                      >
-                        <Minus className="w-3 h-3" />
-                        <span>Sell</span>
-                      </button>
-                      
-                      <button
-                        className="btn btn-outline btn-sm p-2"
-                        title="View Details"
-                      >
-                        <Eye className="w-3 h-3" />
-                      </button>
+                      <button onClick={() => openTradeModal(stock, 'buy')} className="btn btn-success btn-sm flex items-center space-x-1"><Plus className="w-3 h-3" /><span>Buy</span></button>
+                      <button onClick={() => openTradeModal(stock, 'sell')} className="btn btn-danger btn-sm flex items-center space-x-1"><Minus className="w-3 h-3" /><span>Sell</span></button>
+                      <button className="btn btn-outline btn-sm p-2" title="View Details"><Eye className="w-3 h-3" /></button>
                     </div>
                   </td>
                 </tr>
@@ -425,12 +369,8 @@ const Trading = () => {
           {filteredStocks.length === 0 && (
             <div className="text-center py-8">
               <Activity className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-slate-900 mb-2">
-                No stocks found
-              </h3>
-              <p className="text-slate-600">
-                Try adjusting your search or filter criteria
-              </p>
+              <h3 className="text-lg font-medium text-slate-900 mb-2">No stocks found</h3>
+              <p className="text-slate-600">Try adjusting your search or filter criteria</p>
             </div>
           )}
         </div>
@@ -440,153 +380,17 @@ const Trading = () => {
       {showTradeModal && selectedStock && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
-            
-            {/* Modal Header */}
-            <div className="p-6 border-b border-slate-200">
-              <h3 className="text-xl font-semibold text-slate-900">
-                {tradeType === 'buy' ? 'Buy' : 'Sell'} {selectedStock.symbol}
-              </h3>
-              <p className="text-sm text-slate-600 mt-1">
-                Current Price: {formatCurrency(selectedStock.current_price)}
-              </p>
-            </div>
-
-            {/* Modal Body */}
+            <div className="p-6 border-b"><h3 className="text-xl font-semibold text-slate-900">{tradeType === 'buy' ? 'Buy' : 'Sell'} {selectedStock.symbol}</h3><p className="text-sm text-slate-600 mt-1">Current Price: {formatCurrency(selectedStock.current_price)}</p></div>
             <div className="p-6 space-y-4">
-              
-              {/* Stock Info */}
-              <div className="bg-slate-50 rounded-lg p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-slate-900">
-                      {selectedStock.name}
-                    </div>
-                    <div className="text-sm text-slate-600">
-                      {selectedStock.symbol}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-medium text-slate-900">
-                      {formatCurrency(selectedStock.current_price)}
-                    </div>
-                    <div className={`text-sm ${
-                      selectedStock.price_change >= 0 ? 'text-emerald-600' : 'text-red-600'
-                    }`}>
-                      {formatPercent(selectedStock.change_percent)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Quantity Input */}
-              <div className="form-group">
-                <label className="form-label">
-                  Quantity
-                </label>
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => setTradeQuantity(Math.max(1, tradeQuantity - 1))}
-                    className="btn btn-outline btn-sm p-2"
-                  >
-                    <Minus className="w-4 h-4" />
-                  </button>
-                  
-                  <input
-                    type="number"
-                    min="1"
-                    value={tradeQuantity}
-                    onChange={(e) => setTradeQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="input text-center flex-1"
-                  />
-                  
-                  <button
-                    onClick={() => setTradeQuantity(tradeQuantity + 1)}
-                    className="btn btn-outline btn-sm p-2"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Trade Summary */}
-              <div className="bg-slate-50 rounded-lg p-4">
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Shares:</span>
-                    <span className="font-medium">{tradeQuantity}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Price per share:</span>
-                    <span className="font-medium">{formatCurrency(selectedStock.current_price)}</span>
-                  </div>
-                  <div className="border-t border-slate-200 pt-2 flex justify-between">
-                    <span className="font-medium text-slate-900">Total:</span>
-                    <span className="font-bold text-slate-900">
-                      {formatCurrency(selectedStock.current_price * tradeQuantity)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Balance Check */}
-              {tradeType === 'buy' && (
-                <div className="text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Available Balance:</span>
-                    <span className="font-medium">{formatCurrency(userBalance)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">After Trade:</span>
-                    <span className={`font-medium ${
-                      userBalance - (selectedStock.current_price * tradeQuantity) < 0
-                        ? 'text-red-600'
-                        : 'text-emerald-600'
-                    }`}>
-                      {formatCurrency(userBalance - (selectedStock.current_price * tradeQuantity))}
-                    </span>
-                  </div>
-                </div>
-              )}
+              <div className="bg-slate-50 rounded-lg p-4"><div className="flex items-center justify-between"><div><div className="font-medium text-slate-900">{selectedStock.name}</div><div className="text-sm text-slate-600">{selectedStock.symbol}</div></div><div className="text-right"><div className="font-medium text-slate-900">{formatCurrency(selectedStock.current_price)}</div><div className={`text-sm ${selectedStock.price_change >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatPercent(selectedStock.change_percent)}</div></div></div></div>
+              <div className="form-group"><label className="form-label">Quantity</label><div className="flex items-center space-x-2"><button onClick={() => setTradeQuantity(Math.max(1, tradeQuantity - 1))} className="btn btn-outline btn-sm p-2"><Minus className="w-4 h-4" /></button><input type="number" min="1" value={tradeQuantity} onChange={(e) => setTradeQuantity(Math.max(1, parseInt(e.target.value) || 1))} className="input text-center flex-1" /><button onClick={() => setTradeQuantity(tradeQuantity + 1)} className="btn btn-outline btn-sm p-2"><Plus className="w-4 h-4" /></button></div></div>
+              <div className="bg-slate-50 rounded-lg p-4"><div className="space-y-2 text-sm"><div className="flex justify-between"><span className="text-slate-600">Shares:</span><span className="font-medium">{tradeQuantity}</span></div><div className="flex justify-between"><span className="text-slate-600">Price per share:</span><span className="font-medium">{formatCurrency(selectedStock.current_price)}</span></div><div className="border-t pt-2 flex justify-between"><span className="font-medium text-slate-900">Total:</span><span className="font-bold text-slate-900">{formatCurrency(selectedStock.current_price * tradeQuantity)}</span></div></div></div>
+              {tradeType === 'buy' && (<div className="text-sm"><div className="flex justify-between"><span className="text-slate-600">Available Balance:</span><span className="font-medium">{formatCurrency(userBalance)}</span></div><div className="flex justify-between"><span className="text-slate-600">After Trade:</span><span className={`font-medium ${userBalance - (selectedStock.current_price * tradeQuantity) < 0 ? 'text-red-600' : 'text-emerald-600'}`}>{formatCurrency(userBalance - (selectedStock.current_price * tradeQuantity))}</span></div></div>)}
             </div>
-
-            {/* Modal Footer */}
-            <div className="p-6 border-t border-slate-200 flex space-x-3">
-              <button
-                onClick={() => {
-                  setShowTradeModal(false);
-                  setSelectedStock(null);
-                }}
-                className="btn btn-outline flex-1"
-                disabled={isProcessingTrade}
-              >
-                Cancel
-              </button>
-              
-              <button
-                onClick={handleTrade}
-                disabled={isProcessingTrade || (tradeType === 'buy' && selectedStock.current_price * tradeQuantity > userBalance)}
-                className={`btn flex-1 flex items-center justify-center space-x-2 ${
-                  tradeType === 'buy' ? 'btn-success' : 'btn-danger'
-                }`}
-              >
-                {isProcessingTrade ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Processing...</span>
-                  </>
-                ) : (
-                  <>
-                    <ShoppingCart className="w-4 h-4" />
-                    <span>{tradeType === 'buy' ? 'Buy' : 'Sell'} Shares</span>
-                  </>
-                )}
-              </button>
-            </div>
-
+            <div className="p-6 border-t flex space-x-3"><button onClick={() => setShowTradeModal(false)} className="btn btn-outline flex-1" disabled={isProcessingTrade}>Cancel</button><button onClick={handleTrade} disabled={isProcessingTrade || (tradeType === 'buy' && selectedStock.current_price * tradeQuantity > userBalance)} className={`btn flex-1 flex items-center justify-center space-x-2 ${tradeType === 'buy' ? 'btn-success' : 'btn-danger'}`}>{isProcessingTrade ? (<><Loader2 className="w-4 h-4 animate-spin" /><span>Processing...</span></>) : (<><ShoppingCart className="w-4 h-4" /><span>{tradeType === 'buy' ? 'Buy' : 'Sell'} Shares</span></>)}</button></div>
           </div>
         </div>
       )}
-
     </div>
   );
 };

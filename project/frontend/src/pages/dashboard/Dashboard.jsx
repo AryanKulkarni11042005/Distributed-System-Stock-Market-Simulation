@@ -33,112 +33,138 @@ const Dashboard = () => {
   const [marketSummary, setMarketSummary] = useState({});
   const [isAddFundsModalOpen, setIsAddFundsModalOpen] = useState(false);
 
-  // Auto-refresh timer
+  // Auto-refresh timer and initial data load
   useEffect(() => {
-    loadDashboardData();
+    const abortController = new AbortController();
+    const { signal } = abortController;
+
+    loadDashboardData(signal);
     
     const interval = setInterval(() => {
-      refreshMarketData();
+      refreshMarketData(signal);
     }, 30000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      abortController.abort(); // Cleanup: abort pending requests
+    };
   }, []);
 
   // Load all dashboard data
-  const loadDashboardData = async () => {
+  const loadDashboardData = async (signal) => {
     setLoading(true);
     try {
       const userId = localStorage.getItem('userId');
       if (userId) {
         await Promise.all([
-          loadUserData(userId),
-          loadMarketData(),
-          loadPortfolioData(userId),
-          loadRecentTrades(userId),
-          checkSystemHealth()
+          loadUserData(userId, signal),
+          loadMarketData(signal),
+          loadPortfolioData(userId, signal),
+          loadRecentTrades(userId, signal),
+          checkSystemHealth(signal)
         ]);
       }
     } catch (error) {
-      console.error('Error loading dashboard:', error);
-      toast.error('Failed to load dashboard data');
+      if (error.name !== 'AbortError') {
+        console.error('Error loading dashboard:', error);
+        toast.error('Failed to load dashboard data');
+      }
     } finally {
-      setLoading(false);
+      if (!signal.aborted) {
+        setLoading(false);
+      }
     }
   };
 
   // Load user data
-  const loadUserData = async (userId) => {
+  const loadUserData = async (userId, signal) => {
     try {
       const username = localStorage.getItem('username');
-      const balanceResponse = await bankAPI.getBalance(userId);
-      setUser({
-        id: userId,
-        username: username,
-        balance: balanceResponse.data.balance || 0
-      });
+      const balanceResponse = await bankAPI.getBalance(userId, { signal });
+      if (balanceResponse) {
+        setUser({
+          id: userId,
+          username: username,
+          balance: balanceResponse.data.balance || 0
+        });
+      }
     } catch (error) {
-      console.error('Error loading user data:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Error loading user data:', error);
+      }
     }
   };
 
   // Load market data
-  const loadMarketData = async () => {
+  const loadMarketData = async (signal) => {
     try {
       const [stocksResponse, marketSummaryResponse] = await Promise.all([
-        stockAPI.getAllStocks(),
-        stockAPI.getMarketSummary()
+        stockAPI.getAllStocks({ signal }),
+        stockAPI.getMarketSummary({ signal })
       ]);
-      setMarketData(stocksResponse.data.stocks || []);
-      setMarketSummary(marketSummaryResponse.data.market_summary || {});
+      if (stocksResponse) setMarketData(stocksResponse.data.stocks || []);
+      if (marketSummaryResponse) setMarketSummary(marketSummaryResponse.data.market_summary || {});
     } catch (error) {
-      console.error('Error loading market data:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Error loading market data:', error);
+      }
     }
   };
 
   // Load portfolio data
-  const loadPortfolioData = async (userId) => {
+  const loadPortfolioData = async (userId, signal) => {
     try {
-      const response = await userAPI.getUserPortfolio(userId);
-      setPortfolio(response.data.portfolio || { holdings: [] });
+      const response = await userAPI.getUserPortfolio(userId, { signal });
+      if (response) setPortfolio(response.data.portfolio || { holdings: [] });
     } catch (error) {
-      console.error('Error loading portfolio:', error);
-      setPortfolio({ holdings: [] });
+      if (error.name !== 'AbortError') {
+        console.error('Error loading portfolio:', error);
+        setPortfolio({ holdings: [] });
+      }
     }
   };
 
   // Load recent trades
-  const loadRecentTrades = async (userId) => {
+  const loadRecentTrades = async (userId, signal) => {
     try {
-      const response = await tradeAPI.getUserTrades(userId);
-      setRecentTrades(response.data.trades?.slice(0, 5) || []);
+      const response = await tradeAPI.getUserTrades(userId, { signal });
+      if(response) setRecentTrades(response.data.trades?.slice(0, 5) || []);
     } catch (error) {
-      console.error('Error loading trades:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Error loading trades:', error);
+      }
     }
   };
 
   // Check system health
-  const checkSystemHealth = async () => {
+  const checkSystemHealth = async (signal) => {
     try {
-      const health = await healthAPI.checkAllServices();
-      setSystemHealth(health);
+      const health = await healthAPI.checkAllServices({ signal });
+      if (health) setSystemHealth(health);
     } catch (error) {
-      console.error('Error checking system health:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Error checking system health:', error);
+      }
     }
   };
 
   // Refresh market data only
-  const refreshMarketData = async () => {
+  const refreshMarketData = async (signal) => {
     setRefreshing(true);
     try {
       const userId = localStorage.getItem('userId');
-      await loadMarketData();
+      await loadMarketData(signal);
       if(userId) {
-        await loadPortfolioData(userId);
+        await loadPortfolioData(userId, signal);
       }
     } catch (error) {
-      console.error('Error refreshing market data:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Error refreshing market data:', error);
+      }
     } finally {
-      setRefreshing(false);
+      if (!signal.aborted) {
+        setRefreshing(false);
+      }
     }
   };
 

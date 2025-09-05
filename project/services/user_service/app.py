@@ -66,16 +66,21 @@ class UserService:
 
     @staticmethod
     def get_user_portfolio(user_id):
-        return portfolio_collection.find_one({'user_id': ObjectId(user_id)})
+        user_oid = ObjectId(user_id)
+        portfolio = portfolio_collection.find_one({'user_id': user_oid})
+        if not portfolio:
+            # If no portfolio, create one
+            portfolio_collection.insert_one({"user_id": user_oid, "holdings": []})
+            log_with_sync_time(logger, 20, f"Created a new portfolio for user {user_id}", 'user_service')
+            return portfolio_collection.find_one({'user_id': user_oid})
+        return portfolio
 
     @staticmethod
     def update_portfolio(user_id, stock_symbol, quantity, price, trade_type):
         user_oid = ObjectId(user_id)
-        portfolio = portfolio_collection.find_one({'user_id': user_oid})
+        # Use get_user_portfolio to ensure a portfolio exists
+        portfolio = UserService.get_user_portfolio(user_id)
         
-        if not portfolio:
-            raise UserNotFoundException(f"Portfolio not found for user {user_id}")
-
         holding_index = -1
         for i, holding in enumerate(portfolio.get('holdings', [])):
             if holding['stock_symbol'] == stock_symbol:
@@ -84,7 +89,6 @@ class UserService:
 
         if trade_type == 'buy':
             if holding_index != -1:
-                # Update existing holding
                 current_quantity = portfolio['holdings'][holding_index]['quantity']
                 current_avg_price = portfolio['holdings'][holding_index]['avg_price']
                 
@@ -100,7 +104,6 @@ class UserService:
                     }}
                 )
             else:
-                # Add new holding
                 new_holding = {
                     'stock_symbol': stock_symbol,
                     'quantity': quantity,
@@ -117,21 +120,19 @@ class UserService:
                 if current_quantity >= quantity:
                     new_quantity = current_quantity - quantity
                     if new_quantity == 0:
-                        # Remove the holding if quantity is zero
                         portfolio_collection.update_one(
                             {'user_id': user_oid},
                             {'$pull': {'holdings': {'stock_symbol': stock_symbol}}}
                         )
                     else:
-                        # Otherwise, just decrement the quantity
                         portfolio_collection.update_one(
                             {'user_id': user_oid, 'holdings.stock_symbol': stock_symbol},
                             {'$set': {f'holdings.{holding_index}.quantity': new_quantity}}
                         )
                 else:
-                    raise InsufficientStocksException(f"Insufficient stocks to sell. Available: {current_quantity}, Required: {quantity}")
+                    raise InsufficientStocksException(f"Insufficient stocks. Available: {current_quantity}, Have: {quantity}")
             else:
-                raise InsufficientStocksException("Cannot sell stock that is not in the portfolio.")
+                raise InsufficientStocksException("Cannot sell stock you do not own.")
         
         log_with_sync_time(logger, 20, f"Updated portfolio for user {user_id}: {trade_type} {quantity} {stock_symbol}", 'user_service')
         return portfolio_collection.find_one({'user_id': user_oid})
@@ -256,15 +257,16 @@ def get_portfolio(user_id):
         return jsonify({'error': str(e)}), 500
 
 @user_bp.route('/<string:user_id>/portfolio/update', methods=['POST'])
-def update_portfolio(user_id):
+def update_portfolio_route():
     try:
         data = request.json
+        user_id = data.get('user_id')
         stock_symbol = data.get('stock_symbol')
         quantity = data.get('quantity')
         price = data.get('price')
         trade_type = data.get('trade_type')
         
-        if not all([stock_symbol, isinstance(quantity, int), isinstance(price, (int, float)), trade_type]):
+        if not all([user_id, stock_symbol, isinstance(quantity, int), isinstance(price, (int, float)), trade_type]):
             return jsonify({'error': 'All fields with correct types are required'}), 400
         
         updated_portfolio = UserService.update_portfolio(

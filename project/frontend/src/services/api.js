@@ -19,13 +19,6 @@ console.log('API Configuration:', {
   TRADE_SERVICE: `${API_BASE_URL}:${TRADE_SERVICE_PORT}`
 });
 
-const api = axios.create({
-  timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
 // API endpoints
 const API_ENDPOINTS = {
   USER_SERVICE: `${API_BASE_URL}:${USER_SERVICE_PORT}`,
@@ -34,27 +27,29 @@ const API_ENDPOINTS = {
   TRADE_SERVICE: `${API_BASE_URL}:${TRADE_SERVICE_PORT}`
 };
 
-// Generic API call function with improved error handling
+// Generic API call function with AbortController support
 const apiCall = async (url, options = {}) => {
   if (USE_MOCK_DATA) {
     console.log(`[MOCK] API call to: ${url}`);
-    // Simulate a delay for mock calls
     await new Promise(resolve => setTimeout(resolve, 300));
-    // Forcing an error to show mock data fallback in logs
     throw new Error('Using mock data - backend not available');
   }
 
   console.log(`[REAL] API call to: ${url}`);
   
   try {
-    // Using fetch API as it's common in modern React
     const response = await fetch(url, {
+      ...options,
       headers: {
         'Content-Type': 'application/json',
         ...options.headers
       },
-      ...options
+      signal: options.signal, // Pass the signal to the fetch request
     });
+
+    if (options.signal?.aborted) {
+        throw new DOMException('Request aborted', 'AbortError');
+    }
 
     const data = await response.json();
     
@@ -62,76 +57,50 @@ const apiCall = async (url, options = {}) => {
       throw new Error(data.error || `HTTP error! status: ${response.status}`);
     }
     
-    console.log(`[REAL] API response:`, data);
-    return { data }; // Standardize response format
+    console.log(`[REAL] API response for ${url}:`, data);
+    return { data };
     
   } catch (error) {
-    console.error(`[REAL] API call failed for ${url}:`, error);
-    throw error;
+    if (error.name !== 'AbortError') {
+      console.error(`[REAL] API call failed for ${url}:`, error);
+      throw error;
+    }
   }
 };
 
-
 // User Service API
 export const userAPI = {
-  // NEW: Login endpoint
-  login: (credentials) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/login`, {
-    method: 'POST',
-    body: JSON.stringify(credentials)
-  }),
-  
-  // UPDATED: Now sends password
-  createUser: (userData) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/create`, {
-    method: 'POST',
-    body: JSON.stringify(userData)
-  }),
-
-  getUserPortfolio: (userId) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/${userId}/portfolio`),
-
-  buyStock: (userId, tradeData) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/${userId}/portfolio/update`, {
-    method: 'POST',
-    body: JSON.stringify({ ...tradeData, trade_type: 'buy' })
-  }),
-
-  sellStock: (userId, tradeData) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/${userId}/portfolio/update`, {
-    method: 'POST',
-    body: JSON.stringify({ ...tradeData, trade_type: 'sell' })
-  })
+  login: (credentials, options) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/login`, { method: 'POST', body: JSON.stringify(credentials), ...options }),
+  createUser: (userData, options) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/create`, { method: 'POST', body: JSON.stringify(userData), ...options }),
+  getUserPortfolio: (userId, options) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/${userId}/portfolio`, options),
+  buyStock: (userId, tradeData, options) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/${userId}/portfolio/update`, { method: 'POST', body: JSON.stringify({ ...tradeData, trade_type: 'buy' }), ...options }),
+  sellStock: (userId, tradeData, options) => apiCall(`${API_ENDPOINTS.USER_SERVICE}/user/${userId}/portfolio/update`, { method: 'POST', body: JSON.stringify({ ...tradeData, trade_type: 'sell' }), ...options })
 };
 
 // Bank Service API
 export const bankAPI = {
-  getBalance: (userId) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/balance/${userId}`),
-  creditAccount: (transactionData) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/credit`, {
-    method: 'POST',
-    body: JSON.stringify(transactionData)
-  }),
-  debitAccount: (transactionData) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/debit`, {
-    method: 'POST',
-    body: JSON.stringify(transactionData)
-  })
+  getBalance: (userId, options) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/balance/${userId}`, options),
+  creditAccount: (transactionData, options) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/credit`, { method: 'POST', body: JSON.stringify(transactionData), ...options }),
+  debitAccount: (transactionData, options) => apiCall(`${API_ENDPOINTS.BANK_SERVICE}/bank/debit`, { method: 'POST', body: JSON.stringify(transactionData), ...options })
 };
 
 // Stock Service API
 export const stockAPI = {
-  getAllStocks: () => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks`),
-  getStock: (symbol) => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks/${symbol}`),
-  getMarketSummary: () => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks/market/summary`)
+  getAllStocks: (options) => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks`, options),
+  getStock: (symbol, options) => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks/${symbol}`, options),
+  getMarketSummary: (options) => apiCall(`${API_ENDPOINTS.STOCK_SERVICE}/stocks/market/summary`, options)
 };
 
 // Trade Service API
 export const tradeAPI = {
-  logTrade: (tradeData) => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/log`, {
-    method: 'POST',
-    body: JSON.stringify(tradeData)
-  }),
-  getUserTrades: (userId) => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/user/${userId}`),
-  getAllTrades: () => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/all`)
+  logTrade: (tradeData, options) => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/log`, { method: 'POST', body: JSON.stringify(tradeData), ...options }),
+  getUserTrades: (userId, options) => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/user/${userId}`, options),
+  getAllTrades: (options) => apiCall(`${API_ENDPOINTS.TRADE_SERVICE}/trade/all`, options)
 };
 
 // Health Check API
 export const healthAPI = {
-  checkAllServices: async () => {
+  checkAllServices: async (options) => {
     const services = [
       { name: 'User Service', url: `${API_ENDPOINTS.USER_SERVICE}/health` },
       { name: 'Bank Service', url: `${API_ENDPOINTS.BANK_SERVICE}/health` },
@@ -141,13 +110,13 @@ export const healthAPI = {
 
     const healthChecks = await Promise.allSettled(
       services.map(service => 
-        fetch(service.url, { method: 'GET', timeout: 5000 })
+        fetch(service.url, { method: 'GET', timeout: 5000, signal: options?.signal })
           .then(res => ({ name: service.name, status: res.ok ? 'healthy' : 'unhealthy' }))
           .catch(() => ({ name: service.name, status: 'unhealthy' }))
       )
     );
 
-    return healthChecks.map(result => result.value);
+    return healthChecks.map(result => result.status === 'fulfilled' ? result.value : { name: result.reason.name, status: 'unhealthy' });
   }
 };
 
